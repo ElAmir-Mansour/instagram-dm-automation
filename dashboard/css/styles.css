@@ -5499,6 +5499,10 @@ details.cover-step[open] > summary { margin-block-end: var(--space-2); }
 }
 .avatar [data-lucide] { inline-size: var(--icon-lg); block-size: var(--icon-lg); }
 .avatar-img { position: absolute; inset: 0; inline-size: 100%; block-size: 100%; object-fit: cover; }
+/* Other sizes: a connected account's picture (Settings) and the Scheduler's TikTok line. */
+.avatar--lg { inline-size: 44px; block-size: 44px; }
+.avatar--sm { inline-size: 24px; block-size: 24px; font-size: var(--fs-100); }
+.avatar--sm [data-lucide] { inline-size: var(--icon-sm); block-size: var(--icon-sm); }
 
 /* One line in the header, ellipsised: the id is the part a 375px screen can lose. The handle's separator is drawn only
    when there is a handle. */

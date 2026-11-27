@@ -1555,9 +1555,7 @@ const SettingsPage = {
         } else if (connected || needsReconnect) {
             body = html`
                 <div class="row row--start gap-3 mbe-4">
-                    ${thumb
-                        ? html`<img class="tiktok-avatar-lg" src="${thumb}" alt="" width="44" height="44">`
-                        : html`<span class="stat-icon shrink-0"><i data-lucide="youtube" aria-hidden="true"></i></span>`}
+                    ${UI.remoteAvatar({ src: thumb, name: c.channelTitle, icon: 'youtube' })}
                     <div class="stack gap-1">
                         <strong dir="auto">${c.channelTitle || t('settings.youtube.unnamed')}</strong>
                         <span class="health-pill ${needsReconnect ? html.raw('health-stale') : html.raw('health-fresh')}">
@@ -1866,9 +1864,7 @@ const SettingsPage = {
         } else if (connected || needsReconnect) {
             body = html`
                 <div class="row row--start gap-3 mbe-4">
-                    ${avatar
-                        ? html`<img class="tiktok-avatar-lg" src="${avatar}" alt="" width="44" height="44">`
-                        : html`<span class="stat-icon shrink-0"><i data-lucide="music-2" aria-hidden="true"></i></span>`}
+                    ${UI.remoteAvatar({ src: avatar, name: c.displayName, icon: 'music-2' })}
                     <div class="stack gap-1">
                         <strong dir="auto">${c.displayName || t('settings.tiktok.unnamed')}</strong>
                         <span class="health-pill ${needsReconnect ? html.raw('health-stale') : html.raw('health-fresh')}">

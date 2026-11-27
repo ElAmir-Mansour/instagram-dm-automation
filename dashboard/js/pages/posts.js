@@ -723,10 +723,12 @@ const PostsPage = {
     /** "2h" / «2 س»: how late, in the one unit that reads best. The catalogue's own short forms (`common.minutes|hours|days`), so each language writes its own unit. */
     lateText(ms) {
         const minutes = Math.max(1, Math.round(ms / 60000));
-        if (minutes < 60) return t('common.minutes', { n: UI.formatNumber(minutes) });
+        // `count` picks the plural form, so Arabic reads «ساعتين» and «48 ساعة», not «48 س» (QA sweep 2026-11-28).
+        if (minutes < 60) return t('common.minutes', { n: UI.formatNumber(minutes), count: minutes });
         const hours = Math.floor(minutes / 60);
-        if (hours < 48) return t('common.hours', { n: UI.formatNumber(hours) });
-        return t('common.days', { n: UI.formatNumber(Math.floor(hours / 24)) });
+        if (hours < 48) return t('common.hours', { n: UI.formatNumber(hours), count: hours });
+        const days = Math.floor(hours / 24);
+        return t('common.days', { n: UI.formatNumber(days), count: days });
     },
 
     /**
