@@ -73,7 +73,7 @@ describe('UI.workerChip: three states', () => {
         const out = plain(h.UI.workerChip({ worker: ONLINE, jobs: { pending: 0 }, claude: { applies: true, signedOutAt: ago(HOUR) } }));
         assert.match(out, /Claude على الماك غير مسجّل الدخول: شغّل ⁦claude \/login⁩ على الماك/);
         assert.match(plain(h.UI.workerChip({ worker: ONLINE, jobs: { pending: 0 }, claude: { applies: true, signedOutAt: null } })), /الماك متصل · Claude مسجّل الدخول/);
-        assert.match(plain(h.UI.workerChip({ worker: ASLEEP, jobs: { pending: 2 } })), /الماك نائم منذ 3 س · مهمتان تنتظران/);
+        assert.match(plain(h.UI.workerChip({ worker: ASLEEP, jobs: { pending: 2 } })), /الماك نائم منذ 3 ساعات · مهمتان تنتظران/);
     });
 });
 

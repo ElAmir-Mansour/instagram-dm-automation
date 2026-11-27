@@ -194,7 +194,7 @@ const App = {
     },
 
     /** Must match the `?v=` the rest of the assets are served with. */
-    ASSET_VERSION: '13.70',
+    ASSET_VERSION: '13.13',
 
     _modules: Object.create(null),
 
@@ -322,8 +322,11 @@ const App = {
         I18N.init();
         I18N.applyStatic();
         UI.watchTabStrips();
+        UI.watchAvatarFallbacks();
         this.renderLanguageToggle();
-        this.setBaseTitle(this.appTitle());
+        // A reload (a language switch is one) with a session is headed for a page: the tab names it now, in the new language, instead of the
+        // landing page's title until the page has loaded its data (QA-15).
+        this.setBaseTitle(this.routeTitle());
         // The shell's static description is the Arabic one; a reload on a language switch is what lets this follow the language.
         document.querySelector('meta[name="description"]')?.setAttribute('content', t('app.description'));
 
@@ -845,6 +848,19 @@ const App = {
     /** What the tab says when no page is open: the login, the invite and the setup wizard. */
     appTitle() {
         return `${t('app.name')} — ${t('app.tagline')}`;
+    },
+
+    /**
+     * The tab title for the address as it is now, before anything is drawn: "<Page> · <app name>" for a signed-in person on a routable page (the
+     * one `navigate` will set, so the two never disagree), else the app's own title (login, invite, setup wizard).
+     */
+    routeTitle() {
+        try {
+            if (!API.token || this.isInviteHash() || this.isWelcomeHash()) return this.appTitle();
+            const page = this.pageFromHash();
+            if (!this.entryOf(page)) return this.appTitle();
+            return `${this.title(page)} · ${t('app.name')}`;
+        } catch { return this.appTitle(); }
     },
 
     setBaseTitle(base) {
@@ -2183,6 +2199,10 @@ const App = {
                 this.discardCurrent();
             }
         }
+
+        // The tab names the page at once, not when its module and data have arrived (QA-15: it lagged the route by 1-2 s). Not before the question
+        // above: a person who stays has not left.
+        this.setBaseTitle(`${this.title(page)} · ${t('app.name')}`);
 
         const instance = await loading;
         if (seq !== this._navSeq) return; // a later navigation already won

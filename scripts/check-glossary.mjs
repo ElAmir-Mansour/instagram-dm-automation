@@ -65,8 +65,8 @@ const ar = (stems) => new RegExp(foldArabic(`${AR_LEFT}${AR_CLITIC}(?:${stems})$
 const en = (src) => new RegExp(`(?<![{\\p{L}\\p{N}_-])(?:${src})(?![\\p{L}\\p{N}_{])`, 'iu');
 const NEVER = /(?!x)x/;
 
-/** The dictionary key families of the ads product, where "campaign" / «حملة» is the right word. */
-export const ADS_KEYS = ['ads.', 'adsCreate.', 'adsResults.', 'adsAdmin.', 'adsClient.', 'adsBuilder.', 'settings.ads.', 'boost.', 'nav.ads', 'page.ads', 'ops.ai.purpose.ads_', 'tenantLegal.'];
+/** The dictionary key families of the ads product (and the Ads Help article, `help:ads`), where "campaign" / «حملة» is the right word. */
+export const ADS_KEYS = ['ads.', 'adsCreate.', 'adsResults.', 'adsAdmin.', 'adsClient.', 'adsBuilder.', 'settings.ads.', 'boost.', 'nav.ads', 'page.ads', 'ops.ai.purpose.ads_', 'tenantLegal.', 'help:ads'];
 /** The keys where «العميل» meant a workspace (an admin's view of the managed workspaces), so it is retired there. «قوائم العملاء» and «العملاء المحتملين» (the people who message you, lead ads) are the right word and stay. */
 export const WORKSPACE_AS_CLIENT_KEYS = [
     'nav.tenants', 'nav.admin_ads', 'nav.tenant_detail', 'page.admin_ads.', 'tenantProfile.', 'meta.app.enabled', 'tenants.', 'tenantDetail.', 'invites.',
@@ -115,9 +115,11 @@ export function helpEntries(source, file = HELP_FILE) {
         return i < 0 ? 0 : 1 + (source.slice(0, i).match(/\n/g) ?? []).length;
     };
     const out = [];
+    // A `[[slug#section|label]]` link: the target is an id (the slug `campaigns` is not copy); only the label is read.
+    const unlink = (text) => text.replace(/\[\[[^\]|]*\|([^\]]*)\]\]/g, '$1').replace(/\[\[[^\]|]*\]\]/g, '');
     const walk = (node, lang, where) => {
         if (typeof node === 'string') {
-            if (lang) out.push({ file, line: lineOf(node), where, lang, text: node });
+            if (lang) out.push({ file, line: lineOf(node), where, lang, text: unlink(node) });
         } else if (Array.isArray(node)) node.forEach((n) => walk(n, lang, where));
         else if (node && typeof node === 'object') {
             for (const [k, v] of Object.entries(node)) walk(v, k === 'ar' || k === 'en' ? k : lang, where);
@@ -166,9 +168,9 @@ const BOTH = Object.values(DICT_FILES);
 const REASON = {
     oauth: 'an OAuth "client" (client key, client secret, client ID, the Google OAuth client): the provider\'s own word for the app credential, not a person or a workspace',
     agency: 'a real-world client of an agency ("a company that works for clients"): the visitor describing their own business, not a workspace',
+    letter: 'the name of an Arabic letter, «التاء المربوطة» (the tied teh «ة»), explained as a matching rule: a grammar term, not a connection state',
+    adAccount: 'the owner of the AD ACCOUNT, a Meta role that must accept the Custom Audience Terms: not the workspace owner',
     topic: 'the AI-agent topic itself, in an example or a diagram title (an "AI agent" is a thing the owner posts about), not this product\'s DM bot',
-    helpPending:
-        'help pending SA-08: dashboard/js/help-content.js still carries the old glossary (the Help PR rewrites it into فصحى with this glossary). DELETE THIS ENTRY IN THAT PR: the guard then checks the Help, and fails if the entry is left behind',
 };
 
 /**
@@ -191,8 +193,12 @@ export const ALLOWED = [
     { file: BOTH, rule: 'agent', key: 'growth.keywords.placeholder', reason: REASON.topic },
     { file: BOTH, rule: 'agent', key: 'posts.reach.altPlaceholder', reason: REASON.topic },
     { file: BOTH, rule: 'agent', key: 'infographics.diagram.loop', reason: REASON.topic },
-    // The Help still speaks the old glossary until SA-08 lands.
-    { file: HELP_FILE, rule: '*', key: 'help:', reason: REASON.helpPending },
+    // The Help: the Google OAuth client, the AI-agent topic in two examples, an Arabic letter's name, and a Meta role.
+    { file: HELP_FILE, rule: 'client', key: 'help:youtube', reason: REASON.oauth },
+    { file: HELP_FILE, rule: 'agent', key: 'help:seo#alt-text', reason: REASON.topic },
+    { file: HELP_FILE, rule: 'agent', key: 'help:ads#policy-check', reason: REASON.topic },
+    { file: HELP_FILE, rule: 'connected', key: 'help:campaigns#matching', reason: REASON.letter },
+    { file: HELP_FILE, rule: 'account-owner', key: 'help:ads#audiences', reason: REASON.adAccount },
 ];
 
 const filesOf = (e) => (Array.isArray(e.file) ? e.file : [e.file]);

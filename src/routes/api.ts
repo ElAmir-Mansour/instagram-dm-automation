@@ -76,7 +76,7 @@ import { StorageApiError } from '../services/supabaseStorage.js';
 import { R2CounterError, R2LimitError, readR2Banner } from '../services/r2Usage.js';
 import { runCopyBatch } from '../services/r2Copy.js';
 import { checkR2Warnings } from '../services/r2Usage.js';
-import { isTikTokPhotoType, validatePostMedia } from '../services/postMedia.js';
+import { annotateMissingMedia, isTikTokPhotoType, validatePostMedia } from '../services/postMedia.js';
 import adminRouter from './admin.js';
 import invitesRouter from './invites.js';
 import { tiktokPublicRouter, tiktokRouter } from './tiktok.js';
@@ -2998,7 +2998,8 @@ router.get('/posts/scheduled', async (req, res) => {
             'SELECT * FROM scheduled_posts WHERE creator_id = $1 ORDER BY scheduled_time DESC',
             [getTenantId(req)]
         );
-        res.json(result.rows);
+        // One more query for the whole list: which media the retention sweep has already deleted (QA-01).
+        res.json(await annotateMissingMedia(result.rows, (sql, params) => pool.query(sql, params)));
     } catch (err) {
         log('error', 'api.scheduled_list_failed', describeError(err));
         res.status(500).json({ error: 'Failed to fetch scheduled posts.' });

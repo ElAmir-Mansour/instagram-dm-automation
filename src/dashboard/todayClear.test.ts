@@ -155,7 +155,7 @@ describe('the failed-posts card (DW-T3): why, and how old', () => {
         assert.equal(card!.level, 'danger');
         assert.equal(card!.reasons.length, 2);
         assert.equal(card!.reasons[0], '1 had a problem with its media · 3 days ago');
-        assert.match(card!.reasons[1], /^1 was replaced on purpose · dated /, 'a post still ahead has a date, not an age');
+        assert.match(card!.reasons[1], /^1 was replaced on purpose: nothing to fix, archive it · dated /, 'a post still ahead has a date, not an age');
         assert.equal(card!.body, 'Why each one failed is below. Archive the ones you no longer want to fix; they stay under Archived in the Scheduler.');
     });
 

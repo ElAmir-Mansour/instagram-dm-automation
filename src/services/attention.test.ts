@@ -19,7 +19,7 @@ import { TENANT_HEALTH_SQL } from './health.js';
 import { invalidateTenantCache } from './tenant.js';
 import {
     bucketFailed, buildAttention, CONNECTIONS_ATTENTION_SQL, compareItems, dominantReason, FAILED_POSTS_DETAIL_SQL, failureReason, getAttention,
-    OVERDUE_GRACE_MINUTES, POST_FAILED_OLD_DAYS, POSTS_ATTENTION_SQL, THREADS_NEEDING_PERSON_SQL,
+    OVERDUE_GRACE_MINUTES, POST_FAILED_OLD_DAYS, POSTS_ATTENTION_SQL, THREADS_NEEDING_PERSON_SQL, threadFacts,
     REEL_REVIEW_ATTENTION_SQL, STUDIO_JOBS_WAITING_SQL, THREADS_ATTENTION_SQL, TIKTOK_DRAFTS_ATTENTION_SQL, TIKTOK_DRAFT_DAYS,
     WORKER_OFFLINE_MINUTES, workerOfflineFact, type AttentionFacts, type AttentionItem, type StudioFacts,
 } from './attention.js';
@@ -677,6 +677,51 @@ describe('getAttention: U2 statements and facts', () => {
         assert.deepEqual(out.items.find((i) => i.type === 'handoff')!.detail, { closed: { count: 1, ids: ['c1'], oldestAt: iso(9000) } });
         assert.equal(out.counts.scheduler, 2);
         assert.equal(sent.some((s) => s.sql === flat(FAILED_POSTS_DETAIL_SQL) && s.params[0] === TENANT), true);
+    });
+
+    it('QA-02: a thread handed over 16 days ago whose customer wrote yesterday carries the reply window from that message, not the handoff', async () => {
+        const day = 86_400_000;
+        const lastMessage = new Date(NOW - 22 * 3_600_000);
+        install({
+            health: () => [healthRow()],
+            threads: () => [{
+                kind: 'handoff', reason: 'refund', n: 1, oldest_at: new Date(NOW - 16 * day),
+                last_inbound_at: lastMessage, open_n: 1, open_oldest_inbound_at: lastMessage, closed_n: 0,
+            }],
+            posts: () => [{ failed: 0, failed_oldest_at: null, overdue: 0, overdue_oldest_at: null }],
+            connections: () => [{ integration: 'meta', broken: false, at: null }],
+            failedRows: () => [],
+        });
+        const out = await getAttention(TENANT, { now: NOW });
+        const item = out.items.find((i) => i.type === 'handoff')!;
+        assert.equal(item.oldestAt, new Date(NOW - 16 * day).toISOString(), 'the handoff stays what sorts the item');
+        assert.deepEqual(item.detail, { window: { lastInboundAt: lastMessage.toISOString(), open: 1, closesAt: new Date(NOW + 2 * 3_600_000).toISOString() } });
+    });
+
+    it('QA-02: a window already closed says so (open 0, no closing time), and a thread with no customer message says nothing', () => {
+        const closedAt = new Date(NOW - 5 * 86_400_000);
+        const closed = threadFacts([{ kind: 'waiting', reason: null, n: 1, oldest_at: closedAt, last_inbound_at: closedAt, open_n: 0, closed_n: 1, closed_oldest_at: closedAt, closed_ids: ['c1'] }]);
+        const out = buildAttention(facts({ ...closed }));
+        assert.deepEqual(out.items.find((i) => i.type === 'thread_waiting')!.detail!.window, { lastInboundAt: closedAt.toISOString(), open: 0, closesAt: null });
+        const none = buildAttention(facts({ ...threadFacts([{ kind: 'waiting', reason: null, n: 1, oldest_at: closedAt }]) }));
+        assert.equal('detail' in none.items.find((i) => i.type === 'thread_waiting')!, false);
+    });
+
+    it('QA-02: across several threads the newest message and the soonest-closing open window win', () => {
+        const a = new Date(NOW - 3_600_000); const b = new Date(NOW - 20 * 3_600_000); const c = new Date(NOW - 30 * 3_600_000);
+        const merged = threadFacts([
+            { kind: 'waiting', reason: null, n: 2, oldest_at: c, last_inbound_at: a, open_n: 2, open_oldest_inbound_at: b, closed_n: 0 },
+            { kind: 'waiting', reason: null, n: 1, oldest_at: c, last_inbound_at: c, open_n: 0, closed_n: 1, closed_ids: ['x'], closed_oldest_at: c },
+        ]).waiting;
+        assert.equal(merged.lastInboundAt, a.toISOString());
+        assert.deepEqual(merged.open, { count: 2, oldestInboundAt: b.toISOString() });
+    });
+
+    it('QA-02: the threads statement asks for the newest customer message and the open windows with the same 24 h rule as the closed ones', () => {
+        const sql = flat(THREADS_ATTENTION_SQL);
+        assert.match(sql, /MAX\(t\.last_inbound_at\) AS last_inbound_at/);
+        assert.match(sql, /COUNT\(\*\) FILTER \(WHERE t\.last_inbound_at >= NOW\(\) - make_interval\(hours => 24\)\)::int AS open_n/);
+        assert.match(sql, /MIN\(t\.last_inbound_at\) FILTER \(WHERE t\.last_inbound_at >= NOW\(\) - make_interval\(hours => 24\)\) AS open_oldest_inbound_at/);
     });
 
     it('the failed-rows statement follows the count’s rule: this tenant, FAILED, not archived', () => {

@@ -102,7 +102,7 @@ describe('the strings B3 wrote', () => {
         // The app's own title is one function (`appTitle`), set at boot and put back on the login, invite and wizard screens; the router
         // writes "<Page> · <app name>" over it while a page is open.
         assert.match(app, /appTitle\(\) \{\s*return `\$\{t\('app\.name'\)\} — \$\{t\('app\.tagline'\)\}`;/);
-        assert.match(app, /this\.setBaseTitle\(this\.appTitle\(\)\);\s*\/\/ The shell's static description/);
+        assert.match(app, /this\.setBaseTitle\(this\.routeTitle\(\)\);\s*\/\/ The shell's static description/);
         assert.match(app, /meta\[name="description"\]'\)\?\.setAttribute\('content', t\('app\.description'\)\)/);
     });
 

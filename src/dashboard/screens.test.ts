@@ -2439,7 +2439,7 @@ describe('StudioPage — the home view, from stubbed responses', () => {
         s.Studio.destroy();
 
         assert.ok(tagOf(page, 'studio-worker-pill').includes('health-off'), 'grey, not green and not red');
-        assert.ok(page.includes(s.t('workerChip.asleepJobs', { since: s.t('common.hours', { n: '3' }), count: 4, n: '4' })), 'asleep since 3h, and the four jobs that wait for it');
+        assert.ok(page.includes(s.t('workerChip.asleepJobs', { since: s.t('common.hours', { n: '3', count: 3 }), count: 4, n: '4' })), 'asleep since 3h, and the four jobs that wait for it');
         assert.ok(page.includes('id="studio-worker-hint"'));
         assert.ok(page.includes(s.t('studio.worker.startHint')));
         assert.ok(page.includes('30/34'));

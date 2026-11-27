@@ -2306,6 +2306,16 @@ details[open] > .tiktok-app-summary svg { transform: rotate(180deg); }
     aspect-ratio: 1;
     background: var(--surface-solid);
 }
+.post-slide-gone {
+    display: flex; align-items: center; justify-content: center;
+    background: var(--surface-sunken); color: var(--text-muted);
+}
+.post-media-frame--gone {
+    flex-direction: column; gap: var(--space-2);
+    color: var(--text-muted); font-size: var(--fs-100);
+}
+.post-media-frame--gone [data-lucide] { inline-size: var(--icon-md); block-size: var(--icon-md); }
+.queue-group-more { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; margin-block-start: var(--space-3); }
 .post-slide-more {
     display: flex; align-items: center; justify-content: center;
     background: var(--surface-glass-hover);
@@ -5493,6 +5503,10 @@ details.cover-step[open] > summary { margin-block-end: var(--space-2); }
 }
 .avatar [data-lucide] { inline-size: var(--icon-lg); block-size: var(--icon-lg); }
 .avatar-img { position: absolute; inset: 0; inline-size: 100%; block-size: 100%; object-fit: cover; }
+/* Other sizes: a connected account's picture (Settings) and the Scheduler's TikTok line. */
+.avatar--lg { inline-size: 44px; block-size: 44px; }
+.avatar--sm { inline-size: 24px; block-size: 24px; font-size: var(--fs-100); }
+.avatar--sm [data-lucide] { inline-size: var(--icon-sm); block-size: var(--icon-sm); }
 
 /* One line in the header, ellipsised: the id is the part a 375px screen can lose. The handle's separator is drawn only
    when there is a handle. */

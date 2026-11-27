@@ -891,10 +891,7 @@ describe('entry points: a tenant switch, the API client, and the wiring', () => 
             const help = readFileSync('dashboard/js/help-content.js', 'utf8');
             for (const lang of ['ar', 'en'] as const) {
                 const l = load(lang);
-                // help pending SA-08: U5 renamed wa.link.title («Campaign links…» → «Links and QR codes»); the Help still quotes the old name.
-                // Delete the `OLD_LINK_TITLE` alternative in the Help rewrite PR.
-                const OLD_LINK_TITLE = key === 'wa.link.title' ? { ar: 'روابط الحملات ورموز QR', en: 'Campaign links and QR codes' }[lang] : undefined;
-                assert.ok(help.includes(`**${l.t(key)}**`) || (OLD_LINK_TITLE !== undefined && help.includes(`**${OLD_LINK_TITLE}**`)), `${lang}: the article names «${l.t(key)}»`);
+                assert.ok(help.includes(`**${l.t(key)}**`), `${lang}: the article names «${l.t(key)}»`);
             }
             assert.notEqual(s.t(key), key);
         }
