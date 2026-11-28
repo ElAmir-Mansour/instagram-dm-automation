@@ -121,7 +121,7 @@ describe('the one attention poll', () => {
         assert.deepEqual(other.timers.map((t) => t.ms), [300000]);
     });
 
-    it('asks nothing while the tab is hidden, and reads once, forced, when it becomes visible', async () => {
+    it('asks nothing while the tab is hidden, and reads once when it becomes visible with no fresh answer', async () => {
         const r = rig();
         r.App.startAttentionPoll();
         await settle();
@@ -134,10 +134,23 @@ describe('the one attention poll', () => {
         r.h.document.visibilityState = 'visible';
         r.h.fire('document', 'visibilitychange');
         await settle();
-        assert.equal(r.requests.length, 2, 'one read on return, though the last answer is under 30 s old');
+        assert.equal(r.requests.length, 2, 'one read on return when no answer is kept');
         r.timers[0]!.fn();
         await settle();
         assert.equal(r.requests.length, 2, 'the beat that follows is inside the 30 s and shares that answer');
+    });
+
+    it('flipping away and back within 30 s reuses the answer: no request', async () => {
+        const r = rig();
+        r.App.startAttentionPoll();
+        await settle();
+        assert.equal(r.requests.length, 1);
+        r.h.document.visibilityState = 'hidden';
+        r.h.fire('document', 'visibilitychange');
+        r.h.document.visibilityState = 'visible';
+        r.h.fire('document', 'visibilitychange');
+        await settle();
+        assert.equal(r.requests.length, 1, 'a quick tab switch must not cost a request (Vercel CPU)');
     });
 
     it('does not read on a visibility change after sign-out', async () => {

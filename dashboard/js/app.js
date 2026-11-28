@@ -1625,7 +1625,7 @@ const App = {
         if (!this._attentionVisibilityBound && typeof document.addEventListener === 'function') {
             this._attentionVisibilityBound = true;
             document.addEventListener('visibilitychange', () => {
-                if (this._attentionTimer && document.visibilityState === 'visible') this.refreshAttention({ force: true });
+                if (this._attentionTimer && document.visibilityState === 'visible') this.refreshAttention(); // the 30 s share applies: flipping tabs costs nothing
             });
         }
     },
