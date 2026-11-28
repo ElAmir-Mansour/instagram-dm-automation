@@ -402,6 +402,40 @@ const UI = {
         if (typeof field.focus === 'function') field.focus();
     },
 
+    /** Tie a field to the error that explains it: `aria-invalid` plus the error's id in `aria-describedby` (its hint stays). */
+    linkError(field, errorId) {
+        if (!field || !errorId) return;
+        field.setAttribute('aria-invalid', 'true');
+        const ids = (field.getAttribute('aria-describedby') || '').split(/\s+/).filter(Boolean);
+        if (!ids.includes(errorId)) ids.push(errorId);
+        field.setAttribute('aria-describedby', ids.join(' '));
+    },
+
+    /** Undo `linkError`: the field is valid again and no longer points at the error. */
+    unlinkError(field, errorId) {
+        if (!field) return;
+        field.removeAttribute('aria-invalid');
+        const kept = (field.getAttribute('aria-describedby') || '').split(/\s+/).filter((id) => id && id !== errorId).join(' ');
+        if (kept) field.setAttribute('aria-describedby', kept);
+        else field.removeAttribute('aria-describedby');
+    },
+
+    /**
+     * Write one `.form-error` line into `host` (an element with an id), or clear it when `message` is empty. With `field` (an element or an
+     * id) the field is marked invalid and points at the line; whichever field the host linked last time is released first. `extra` is
+     * SafeHtml placed after the line.
+     */
+    formError(host, message, o = {}) {
+        if (!host) return;
+        const prior = host._errField;
+        const id = `${host.id || 'ui-form'}-msg`;
+        if (prior) { UI.unlinkError(prior, id); host._errField = null; }
+        if (!message) { host.innerHTML = ''; return; }
+        host.innerHTML = esc(html`<p class="form-error" id="${id}"${o.dir ? html` dir="${o.dir}"` : ''}${o.alert ? html.raw(' role="alert"') : ''}>${message}</p>${o.extra || ''}`);
+        const field = typeof o.field === 'string' ? document.getElementById(o.field) : o.field;
+        if (field) { UI.linkError(field, id); host._errField = field; }
+    },
+
     clearInvalid(root) {
         if (!root) return;
         root.querySelectorAll('[aria-invalid="true"]').forEach((el) => {

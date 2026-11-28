@@ -334,18 +334,18 @@ const TenantDetailPage = {
             <form id="tenant-legal-form" data-submit="tenantDetail:recordLegal" novalidate>
                 <div class="form-group">
                     <label class="form-label" for="tenant-legal-scope">${t('tenantLegal.scope')}</label>
-                    <select class="form-input" id="tenant-legal-scope" name="scope">
+                    <select class="select" id="tenant-legal-scope" name="scope">
                         ${this.LEGAL_SCOPES.map((sc) => html`<option value="${sc}">${t(`tenantLegal.scope.${sc}`)}</option>`)}
                     </select>
                 </div>
                 <div class="form-group">
                     <label class="form-label" for="tenant-legal-countries">${t('tenantLegal.countries')}</label>
-                    <input class="form-input" id="tenant-legal-countries" name="countries" dir="ltr" value="EG, SA" autocomplete="off">
+                    <input class="field" id="tenant-legal-countries" name="countries" dir="ltr" value="EG, SA" autocomplete="off">
                     <p class="form-hint">${t('tenantLegal.countries.hint')}</p>
                 </div>
                 <div class="form-group">
                     <label class="form-label" for="tenant-legal-note">${t('tenantLegal.note')}</label>
-                    <textarea class="form-input" id="tenant-legal-note" name="note" rows="2" maxlength="500" dir="auto" required></textarea>
+                    <textarea class="field-textarea" id="tenant-legal-note" name="note" rows="2" maxlength="500" dir="auto" required></textarea>
                     <p class="form-hint">${t('tenantLegal.note.hint')}</p>
                 </div>
                 <div id="tenant-legal-error"></div>
@@ -369,7 +369,7 @@ const TenantDetailPage = {
             UI.toast(t('tenantLegal.recorded'), 'success');
             await this.mountLegal();
         } catch (err) {
-            if (error) error.innerHTML = esc(html`<p class="form-error" dir="auto">${(err && err.message) || t('error.unexpected')}</p>`);
+            UI.formError(error, (err && err.message) || t('error.unexpected'), { dir: 'auto' });
         }
     },
 

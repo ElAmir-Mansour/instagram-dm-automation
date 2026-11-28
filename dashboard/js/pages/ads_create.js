@@ -279,6 +279,20 @@ const AdsCreatePage = {
         this.mountAudiencePickers();
     },
 
+    /**
+     * Every `fieldError` that has a message is tied to its field: `aria-invalid="true"` and the error's id in `aria-describedby`, next to the
+     * hint. The step was just redrawn, so no field carries a stale link. A group with no single control (placements, destinations) has no
+     * field to mark; its error is still announced by its own `role="alert"`.
+     */
+    wireFieldErrors(st) {
+        for (const name of Object.keys(st.errors || {})) {
+            if (!st.errors[name]) continue;
+            const errorId = `adsc-err-${name}`;
+            const field = this.host(`adsc-${name}`) || this.host(`adsc-file-${name}`) || (typeof document.querySelector === 'function' ? document.querySelector(`#adsc-step [data-field="${name}"]`) : null);
+            if (field) UI.linkError(field, errorId);
+        }
+    },
+
     /** One region, redrawn in place (a step's panel, the policy, the money line). */
     write(id, markup) {
         const host = this.host(id);
@@ -363,6 +377,7 @@ const AdsCreatePage = {
         const nav = this.host('adsc-nav');
         if (nav) { nav.innerHTML = esc(this.navMarkup(st)); UI.icons(nav); }
         this.write('adsc-stepper', this.stepperMarkup(st));
+        this.wireFieldErrors(st);
         this.mountAudiencePickers();
     },
 
@@ -433,7 +448,7 @@ const AdsCreatePage = {
             ${this.goalLocked('leads') ? html`<p class="form-hint" id="adsc-leads-locked">${t('adsCreate.leads.locked')} ${UI.helpLink('ads#leads-and-privacy', t('help.link.learnMore'))}</p>` : ''}
             <div class="form-group">
                 <label class="form-label" for="adsc-name">${t('adsCreate.name')}</label>
-                <input type="text" class="form-input" id="adsc-name" maxlength="200" value="${st.name}" data-input="adsc:field" data-field="name" dir="auto"
+                <input type="text" class="field" id="adsc-name" maxlength="200" value="${st.name}" data-input="adsc:field" data-field="name" dir="auto"
                     aria-describedby="adsc-name-hint">
                 <p class="form-hint" id="adsc-name-hint">${t('adsCreate.name.hint')}</p>
                 ${this.fieldError('name')}
@@ -448,7 +463,7 @@ const AdsCreatePage = {
         const optimization = opt.length > 1 ? html`
             <div class="form-group">
                 <label class="form-label" for="adsc-optimization">${t('adsCreate.optimization')}</label>
-                <select class="form-input" id="adsc-optimization" data-change="adsc:field" data-field="optimization">
+                <select class="select" id="adsc-optimization" data-change="adsc:field" data-field="optimization">
                     ${opt.map((o, i) => html`<option value="${i === 0 ? '' : o}" ${(st.optimization || '') === (i === 0 ? '' : o) ? html.raw('selected') : ''}>${t(`adsCreate.opt.${o}`)}</option>`)}
                 </select>
                 <p class="form-hint">${t(`adsCreate.opt.${st.optimization || opt[0]}.hint`)}</p>
@@ -471,7 +486,7 @@ const AdsCreatePage = {
                 <div class="form-group">
                     <label class="form-label" for="adsc-lead-form">${t('adsCreate.leads.form')}</label>
                     ${forms.length ? html`
-                        <select class="form-input" id="adsc-lead-form" data-change="adsc:field" data-field="leadFormId">
+                        <select class="select" id="adsc-lead-form" data-change="adsc:field" data-field="leadFormId">
                             ${forms.map((f) => html`<option value="${f.metaId}" ${String(f.metaId) === st.leadFormId ? html.raw('selected') : ''}>${f.name}</option>`)}
                         </select>` : html`<p class="form-hint" id="adsc-no-lead-forms">${t('adsCreate.leads.noForms')} <a href="#/ads_leads">${t('ads.tabs.leads')}</a></p>`}
                     ${this.fieldError('leadFormId')}
@@ -489,7 +504,7 @@ const AdsCreatePage = {
                     ${st.link.mode === 'offer' && offers.length ? html`
                         <div class="form-group adsc-indent">
                             <label class="form-label" for="adsc-offer">${t('adsCreate.link.which')}</label>
-                            <select class="form-input" id="adsc-offer" data-change="adsc:field" data-field="offerId">
+                            <select class="select" id="adsc-offer" data-change="adsc:field" data-field="offerId">
                                 ${offers.map((o) => html`<option value="${o.id}" ${String(o.id) === st.link.offerId ? html.raw('selected') : ''}>${o.name || o.url}</option>`)}
                             </select>
                         </div>` : ''}
@@ -498,7 +513,7 @@ const AdsCreatePage = {
                     ${st.link.mode === 'url' ? html`
                         <div class="form-group adsc-indent">
                             <label class="form-label" for="adsc-url">${t('adsCreate.link.address')}</label>
-                            <input type="url" class="form-input" id="adsc-url" dir="ltr" placeholder="https://" value="${st.link.url}" data-input="adsc:field" data-field="url">
+                            <input type="url" class="field" id="adsc-url" dir="ltr" placeholder="https://" value="${st.link.url}" data-input="adsc:field" data-field="url">
                             <p class="form-hint text-warning">${t('adsCreate.link.untracked')}</p>
                             ${this.fieldError('url')}
                         </div>` : ''}
@@ -551,7 +566,7 @@ const AdsCreatePage = {
         return html`
             <div class="form-group">
                 <label class="form-label" for="adsc-post">${t('adsCreate.creative.whichPost')}</label>
-                <select class="form-input" id="adsc-post" data-change="adsc:field" data-field="postId">
+                <select class="select" id="adsc-post" data-change="adsc:field" data-field="postId">
                     <option value="">${t('adsCreate.creative.choosePost')}</option>
                     ${posts.map((p) => html`<option value="${p.id}" ${String(p.id) === st.postId ? html.raw('selected') : ''}>${String(p.caption || p.id).slice(0, 80)}</option>`)}
                 </select>
@@ -560,7 +575,7 @@ const AdsCreatePage = {
             ${allowed.length > 1 ? html`
                 <div class="form-group">
                     <label class="form-label" for="adsc-platform">${t('adsCreate.creative.platform')}</label>
-                    <select class="form-input" id="adsc-platform" data-change="adsc:field" data-field="platform">
+                    <select class="select" id="adsc-platform" data-change="adsc:field" data-field="platform">
                         ${allowed.map((p) => html`<option value="${p}" ${p === st.platform ? html.raw('selected') : ''}>${t(`adsCreate.platform.${p}`)}</option>`)}
                     </select>
                 </div>` : ''}
@@ -578,7 +593,7 @@ const AdsCreatePage = {
         return html`
             <div class="form-group adsc-slot" data-slot="${slot}">
                 <label class="form-label" for="adsc-file-${slot}">${label}</label>
-                <input type="file" class="form-input" id="adsc-file-${slot}" accept="${accept}" data-change="adsc:file" data-slot="${slot}" aria-describedby="adsc-file-${slot}-hint">
+                <input type="file" class="field" id="adsc-file-${slot}" accept="${accept}" data-change="adsc:file" data-slot="${slot}" aria-describedby="adsc-file-${slot}-hint">
                 <p class="form-hint" id="adsc-file-${slot}-hint">${hint}</p>
                 ${progress}
                 ${line}
@@ -701,26 +716,26 @@ const AdsCreatePage = {
         const text = fromPost ? html`<p class="form-hint">${t('adsCreate.copy.postCaption')}</p>` : html`
             <div class="form-group">
                 <label class="form-label" for="adsc-primary">${t('adsCreate.copy.primary')}</label>
-                <textarea class="form-input" id="adsc-primary" rows="5" maxlength="2200" dir="auto" data-input="adsc:field" data-field="primaryText"
+                <textarea class="field-textarea" id="adsc-primary" rows="5" maxlength="2200" dir="auto" data-input="adsc:field" data-field="primaryText"
                     aria-describedby="adsc-primary-count">${st.primaryText}</textarea>
                 <p class="form-hint" id="adsc-primary-count">${t('adsCreate.copy.count', { count: UI.formatNumber(count), cut: UI.formatNumber(this.FEED_CUT) })}</p>
                 ${this.fieldError('primaryText')}
             </div>
             <div class="form-group">
                 <label class="form-label" for="adsc-headline">${t('adsCreate.copy.headline')}</label>
-                <input type="text" class="form-input" id="adsc-headline" maxlength="255" dir="auto" value="${st.headline}" data-input="adsc:field" data-field="headline">
+                <input type="text" class="field" id="adsc-headline" maxlength="255" dir="auto" value="${st.headline}" data-input="adsc:field" data-field="headline">
             </div>`;
         const cta = st.goal === 'traffic' || st.goal === 'leads' ? html`
             <div class="form-group">
                 <label class="form-label" for="adsc-cta">${t('adsCreate.copy.cta')}</label>
-                <select class="form-input" id="adsc-cta" data-change="adsc:field" data-field="cta">
+                <select class="select" id="adsc-cta" data-change="adsc:field" data-field="cta">
                     ${(st.goal === 'leads' ? this.LEAD_CTAS : this.CTAS).map((c) => html`<option value="${c}" ${c === st.cta ? html.raw('selected') : ''}>${t(`adsCreate.cta.${c}`)}</option>`)}
                 </select>
             </div>` : '';
         const message = st.goal === 'messages' ? html`
             <div class="form-group">
                 <label class="form-label" for="adsc-greeting">${t('adsCreate.copy.greeting')}</label>
-                <textarea class="form-input" id="adsc-greeting" rows="2" maxlength="300" dir="auto" data-input="adsc:field" data-field="greeting">${st.greeting}</textarea>
+                <textarea class="field-textarea" id="adsc-greeting" rows="2" maxlength="300" dir="auto" data-input="adsc:field" data-field="greeting">${st.greeting}</textarea>
                 <p class="form-hint">${t('adsCreate.copy.greeting.hint')}</p>
             </div>
             <fieldset class="adsc-fieldset">
@@ -728,7 +743,7 @@ const AdsCreatePage = {
                 ${st.ice.map((row, i) => html`
                     <div class="adsc-ice">
                         <label class="sr-only" for="adsc-ice-${i}">${t('adsCreate.copy.iceN', { n: i + 1 })}</label>
-                        <input type="text" class="form-input" id="adsc-ice-${i}" maxlength="80" dir="auto" value="${row.title}" data-input="adsc:ice" data-index="${i}">
+                        <input type="text" class="field" id="adsc-ice-${i}" maxlength="80" dir="auto" value="${row.title}" data-input="adsc:ice" data-index="${i}">
                         ${UI.button({ variant: 'ghost', size: 'sm', icon: 'x', label: t('adsCreate.remove'), action: 'adsc:iceRemove', data: { index: i } })}
                     </div>`)}
                 ${st.ice.length < this.ICE_MAX ? UI.button({ variant: 'secondary', size: 'sm', icon: 'plus', label: t('adsCreate.copy.iceAdd'), action: 'adsc:iceAdd' }) : ''}
@@ -802,7 +817,7 @@ const AdsCreatePage = {
         return html`
             <div class="form-group">
                 <label class="form-label" for="adsc-countries">${t('adsCreate.aud.countries')}</label>
-                <input type="text" class="form-input" id="adsc-countries" dir="ltr" value="${st.countries}" data-input="adsc:field" data-field="countries" aria-describedby="adsc-countries-hint">
+                <input type="text" class="field" id="adsc-countries" dir="ltr" value="${st.countries}" data-input="adsc:field" data-field="countries" aria-describedby="adsc-countries-hint">
                 <p class="form-hint" id="adsc-countries-hint">${t('adsCreate.aud.countries.hint')}</p>
                 ${this.fieldError('countries')}
             </div>
@@ -811,24 +826,24 @@ const AdsCreatePage = {
             ${st.cities.length ? html`
                 <div class="form-group">
                     <label class="form-label" for="adsc-radius">${t('adsCreate.aud.radius')}</label>
-                    <input type="number" class="form-input" id="adsc-radius" min="${special ? 25 : this.RADIUS_MIN}" max="${this.RADIUS_MAX}" value="${st.cities[0].radiusKm}" data-change="adsc:field" data-field="radius">
+                    <input type="number" class="field" id="adsc-radius" min="${special ? 25 : this.RADIUS_MIN}" max="${this.RADIUS_MAX}" value="${st.cities[0].radiusKm}" data-change="adsc:field" data-field="radius">
                     <p class="form-hint">${t('adsCreate.aud.radius.hint', { min: special ? 25 : this.RADIUS_MIN, max: this.RADIUS_MAX })}</p>
                 </div>` : ''}
             <div class="adsc-row">
                 <div class="form-group">
                     <label class="form-label" for="adsc-age-min">${t('adsCreate.aud.ageMin')}</label>
-                    <input type="number" class="form-input" id="adsc-age-min" min="18" max="${advantage ? 25 : 65}" value="${st.ageMin}" data-change="adsc:field" data-field="ageMin" ${special ? html.raw('disabled') : ''}>
+                    <input type="number" class="field" id="adsc-age-min" min="18" max="${advantage ? 25 : 65}" value="${st.ageMin}" data-change="adsc:field" data-field="ageMin" ${special ? html.raw('disabled') : ''}>
                     ${this.fieldError('ageMin')}
                 </div>
                 ${advantage || special ? '' : html`
                     <div class="form-group">
                         <label class="form-label" for="adsc-age-max">${t('adsCreate.aud.ageMax')}</label>
-                        <input type="number" class="form-input" id="adsc-age-max" min="18" max="65" value="${st.ageMax}" placeholder="65" data-change="adsc:field" data-field="ageMax">
+                        <input type="number" class="field" id="adsc-age-max" min="18" max="65" value="${st.ageMax}" placeholder="65" data-change="adsc:field" data-field="ageMax">
                         ${this.fieldError('ageMax')}
                     </div>`}
                 <div class="form-group">
                     <label class="form-label" for="adsc-gender">${t('adsCreate.aud.gender')}</label>
-                    <select class="form-input" id="adsc-gender" data-change="adsc:field" data-field="gender" ${special ? html.raw('disabled') : ''}>
+                    <select class="select" id="adsc-gender" data-change="adsc:field" data-field="gender" ${special ? html.raw('disabled') : ''}>
                         ${['all', 'men', 'women'].map((g) => html`<option value="${g}" ${g === st.gender ? html.raw('selected') : ''}>${t(`adsCreate.aud.gender.${g}`)}</option>`)}
                     </select>
                 </div>
@@ -843,7 +858,7 @@ const AdsCreatePage = {
             ${special ? '' : html`<div id="adsc-aud-exclude" class="adsc-audiences"></div>`}
             <div class="form-group">
                 <label class="form-label" for="adsc-special">${t('adsCreate.aud.special')}</label>
-                <select class="form-input" id="adsc-special" data-change="adsc:field" data-field="special" aria-describedby="adsc-special-hint">
+                <select class="select" id="adsc-special" data-change="adsc:field" data-field="special" aria-describedby="adsc-special-hint">
                     ${this.SPECIAL.map((c) => html`<option value="${c}" ${c === st.special ? html.raw('selected') : ''} ${c === 'political' ? html.raw('disabled') : ''}>${t(`adsCreate.special.${c}`)}</option>`)}
                 </select>
                 <p class="form-hint ${special ? html.raw('text-warning') : ''}" id="adsc-special-hint">${t(special ? 'adsCreate.special.warn' : 'adsCreate.special.hint')}</p>
@@ -858,7 +873,7 @@ const AdsCreatePage = {
         return html`
             <div class="form-group adsc-search">
                 <label class="form-label" for="adsc-search-${kind}">${label}</label>
-                <input type="search" class="form-input" id="adsc-search-${kind}" dir="auto" value="${open ? st.search.q : ''}" data-input="adsc:search" data-type="${type}"
+                <input type="search" class="field" id="adsc-search-${kind}" dir="auto" value="${open ? st.search.q : ''}" data-input="adsc:search" data-type="${type}"
                     aria-describedby="adsc-search-${kind}-hint" aria-controls="adsc-results-${kind}" autocomplete="off">
                 <p class="form-hint" id="adsc-search-${kind}-hint">${hint}</p>
                 <ul class="adsc-results" id="adsc-results-${kind}" aria-live="polite">
@@ -963,18 +978,18 @@ const AdsCreatePage = {
             </fieldset>
             <div class="form-group">
                 <label class="form-label" for="adsc-amount">${t(st.kind === 'daily' ? 'adsCreate.budget.amountDaily' : 'adsCreate.budget.amountTotal', { currency: this.currency || '' })}</label>
-                <input type="number" class="form-input" id="adsc-amount" min="0" step="0.01" dir="ltr" value="${st.amount}" data-input="adsc:field" data-field="amount" aria-describedby="adsc-money">
+                <input type="number" class="field" id="adsc-amount" min="0" step="0.01" dir="ltr" value="${st.amount}" data-input="adsc:field" data-field="amount" aria-describedby="adsc-money">
                 ${this.fieldError('amount')}
             </div>
             <div class="adsc-row">
                 <div class="form-group">
                     <label class="form-label" for="adsc-start">${t('adsCreate.budget.start')}</label>
-                    <input type="datetime-local" class="form-input" id="adsc-start" value="${st.start}" data-change="adsc:field" data-field="start">
+                    <input type="datetime-local" class="field" id="adsc-start" value="${st.start}" data-change="adsc:field" data-field="start">
                     ${this.fieldError('start')}
                 </div>
                 <div class="form-group">
                     <label class="form-label" for="adsc-end">${t(st.kind === 'lifetime' ? 'adsCreate.budget.endRequired' : 'adsCreate.budget.endOptional')}</label>
-                    <input type="datetime-local" class="form-input" id="adsc-end" value="${st.end}" data-change="adsc:field" data-field="end">
+                    <input type="datetime-local" class="field" id="adsc-end" value="${st.end}" data-change="adsc:field" data-field="end">
                     ${this.fieldError('end')}
                 </div>
             </div>
@@ -988,11 +1003,11 @@ const AdsCreatePage = {
                         <div class="adsc-row">
                             <div class="form-group">
                                 <label class="form-label" for="adsc-from">${t('adsCreate.schedule.from')}</label>
-                                <input type="number" class="form-input" id="adsc-from" min="0" max="23" value="${st.fromHour}" data-change="adsc:field" data-field="fromHour">
+                                <input type="number" class="field" id="adsc-from" min="0" max="23" value="${st.fromHour}" data-change="adsc:field" data-field="fromHour">
                             </div>
                             <div class="form-group">
                                 <label class="form-label" for="adsc-to">${t('adsCreate.schedule.to')}</label>
-                                <input type="number" class="form-input" id="adsc-to" min="1" max="24" value="${st.toHour}" data-change="adsc:field" data-field="toHour">
+                                <input type="number" class="field" id="adsc-to" min="1" max="24" value="${st.toHour}" data-change="adsc:field" data-field="toHour">
                             </div>
                         </div>
                         ${this.fieldError('schedule')}
