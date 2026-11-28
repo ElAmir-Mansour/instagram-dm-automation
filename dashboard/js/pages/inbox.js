@@ -1024,7 +1024,6 @@ const InboxPage = {
             this.total = Number.isFinite(total) ? total : rows.length;
             this.noteListChange(rows);
             this.renderThreads();
-            this.reportWaiting();
             this.openDeepLink();
             // Not awaited, and never throws: the names of the newest threads fill in behind the list, one at a time.
             this.backfillProfiles(rows);
@@ -1066,11 +1065,13 @@ const InboxPage = {
         }
     },
 
-    /** SH3: the count on the Inbox nav item and in the tab title, from every screen. */
-    reportWaiting() {
-        if (typeof App === 'undefined' || typeof App.setInboxWaiting !== 'function') return;
-        // Waiting for a reply, or handed over to a person: the two are what the owner opens the inbox for.
-        App.setInboxWaiting(this.threads.filter((x) => Attention.needsHuman(x)).length);
+    /**
+     * The count on the Inbox nav item and in the tab title is the SERVER's `counts.inbox` (R4-F1), read by the shell for every page. This screen no
+     * longer counts its newest 100 conversations itself: after something it changed (Mark handled, Reopen, the AI switch) it asks for a fresh answer.
+     */
+    refreshBadge() {
+        if (typeof App === 'undefined' || typeof App.refreshAttention !== 'function') return;
+        App.refreshAttention({ force: true });
     },
 
     /** A thread from the list or from the search's answer — the open one may be either. */
@@ -3144,7 +3145,6 @@ const InboxPage = {
             if (toggle && toggle.checked !== value) toggle.checked = value;
             this.renderThreads();
             if (thread) this.paintAiState(thread);
-            this.reportWaiting();
         };
 
         this.resetBackoff();
@@ -3160,6 +3160,7 @@ const InboxPage = {
             },
         }).then((result) => {
             this.pendingBotState.delete(id);
+            this.refreshBadge();
             return result;
         });
     },
@@ -3203,7 +3204,6 @@ const InboxPage = {
         const paint = (values) => {
             copies.forEach((copy, i) => { copy.handled_at = values[i]; });
             this.renderThreads();
-            this.reportWaiting();
             const thread = this.findThread(id);
             if (thread) this.updateChatHeader(thread);
             // Whatever had focus may have gone with the button that said "Mark handled": the row or the header's button takes it.
@@ -3218,6 +3218,7 @@ const InboxPage = {
             if (epoch !== this._epoch) return true;
             const at = result && result.handled_at !== undefined ? result.handled_at : stamp;
             paint(copies.map(() => at));
+            this.refreshBadge();
             return true;
         } catch (err) {
             console.error('Mark Handled Error:', err);

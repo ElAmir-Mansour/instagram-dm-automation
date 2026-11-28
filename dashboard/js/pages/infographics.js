@@ -703,8 +703,8 @@ const InfographicsPage = {
                     <div class="ig-portrait-row">
                         ${photo ? html`<img src="${photo}" alt="${t('infographics.brand.portrait')}" class="ig-portrait-img" width="64" height="64">`
                             : html`<span class="ig-portrait-img ig-portrait-empty" aria-hidden="true"><i data-lucide="image-plus"></i></span>`}
+                        <input class="sr-only file-input" id="ig-b-photo" type="file" accept="image/jpeg,image/png,image/webp" data-change="infographics:photo">
                         <label class="btn btn-secondary btn-sm" for="ig-b-photo"><i data-lucide="upload" aria-hidden="true"></i> ${t('infographics.brand.upload')}</label>
-                        <input class="sr-only" id="ig-b-photo" type="file" accept="image/jpeg,image/png,image/webp" data-change="infographics:photo">
                         ${photo ? UI.button({ variant: 'ghost', size: 'sm', icon: 'x', label: t('infographics.brand.removePhoto'), action: 'infographics:removePhoto' }) : ''}
                     </div>
                     <p class="form-hint">${t('infographics.brand.portraitHint')}</p>

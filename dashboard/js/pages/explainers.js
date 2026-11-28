@@ -2391,8 +2391,8 @@ const ExplainersPage = {
                 </div>
                 <div class="ex-actions">
                     ${UI.button({ size: 'sm', icon: 'sparkles', label: t('explainers.character.generate'), action: 'explainers:candidates', data: { i }, id: `ex-c-${i}-gen` })}
+                    <input class="sr-only file-input" id="ex-c-${i}-file" type="file" accept="image/png,image/jpeg,image/webp" data-change="explainers:uploadReference" data-i="${i}">
                     <label class="btn btn-secondary btn-sm" for="ex-c-${i}-file"><i data-lucide="upload" aria-hidden="true"></i> ${t('explainers.character.upload')}</label>
-                    <input class="sr-only" id="ex-c-${i}-file" type="file" accept="image/png,image/jpeg,image/webp" data-change="explainers:uploadReference" data-i="${i}">
                     ${UI.button({ variant: 'ghost', size: 'sm', icon: 'trash-2', label: t('explainers.character.remove'), action: 'explainers:characterRemove', data: { i }, id: `ex-c-${i}-remove` })}
                 </div>
                 <p class="form-hint">${t('explainers.character.generateHint', { px: this.REFERENCE_PX })}</p>

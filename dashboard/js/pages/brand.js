@@ -389,8 +389,8 @@ const BrandPage = {
         const d = this.draft;
         const accept = '.svg,image/svg+xml,image/png,image/jpeg,image/webp';
         const choose = (label) => (edit
-            ? html`<label class="btn btn-secondary" for="brand-file"><i data-lucide="upload" aria-hidden="true"></i> ${label}</label>
-                <input class="sr-only" id="brand-file" type="file" accept="${accept}" data-change="brand:file"${working ? html.raw(' disabled') : ''}>`
+            ? html`<input class="sr-only file-input" id="brand-file" type="file" accept="${accept}" data-change="brand:file"${working ? html.raw(' disabled') : ''}>
+                <label class="btn btn-secondary" for="brand-file"><i data-lucide="upload" aria-hidden="true"></i> ${label}</label>`
             : html`<button type="button" class="btn btn-secondary" disabled><i data-lucide="upload" aria-hidden="true"></i> ${label}</button>`);
         const head = html`
             <h2 class="section-title" id="brand-logo-title">${t('brand.logo.title')}</h2>

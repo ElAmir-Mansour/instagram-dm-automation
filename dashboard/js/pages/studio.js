@@ -3967,7 +3967,6 @@ const StudioPage = {
         const create = !!(this.work && this.work.campaign && this.work.campaign.create);
         const tiktokDefault = this.tiktokDefaultChoice();
         const zone = this.scheduleZone();
-        const device = this.deviceZone();
         const radio = (value, label, hint) => html`
             <label class="tiktok-delivery-option">
                 <input type="radio" name="tiktok" value="${value}" ${value === tiktokDefault ? html.raw('checked') : ''}>
@@ -3991,11 +3990,11 @@ const StudioPage = {
                     <input type="datetime-local" class="field studio-custom-time${!loading && chosen === 'custom' ? '' : html.raw(' hidden')}"
                            id="st-slot-custom" name="custom_time" aria-label="${t('studio.schedule.customLabel')}"
                            data-change="studio:scheduleChange" aria-describedby="st-slot-custom-hint"
-                           value="${UI.toLocalInputValue(new Date(Date.now() + 60 * 60 * 1000))}">
+                           value="${UI.zoneInputValue(new Date(Date.now() + 60 * 60 * 1000), zone)}">
                     <p class="form-hint" id="st-slot-hint">${this.slotsError
                         ? t('studio.schedule.slotsFailed')
                         : t('studio.schedule.zoneHint', { city: this.zoneCity(zone), zone })}</p>
-                    ${zone !== device ? html`<p class="form-hint${chosen === 'custom' ? '' : html.raw(' hidden')}" id="st-slot-custom-hint">${t('studio.schedule.deviceZone', { zone: device })}</p>` : ''}
+                    <p class="form-hint${chosen === 'custom' ? '' : html.raw(' hidden')}" id="st-slot-custom-hint">${t('studio.schedule.customZone', { city: this.zoneCity(zone) })}</p>
                 </div>
                 <fieldset class="tiktok-delivery" data-change="studio:scheduleChange">
                     <legend class="form-label">${t('studio.schedule.tiktok')}</legend>
@@ -5205,7 +5204,8 @@ const StudioPage = {
 
     /**
      * The POST /schedule body. A slot is the server's own ISO string, sent back
-     * untouched; a custom time is local wall time from the datetime field.
+     * untouched; a custom time is wall time in the
+     * workspace's zone from the datetime field.
      *
      * @returns {{ ok: true, body: object } | { ok: false, message: string, field: string }}
      */
@@ -5218,7 +5218,7 @@ const StudioPage = {
             when = slot;
         } else {
             field = 'st-slot-custom';
-            when = UI.fromLocalInputValue(String(data.get('custom_time') || ''));
+            when = UI.zoneInput(String(data.get('custom_time') || ''), this.scheduleZone());
             if (when && Date.parse(when) <= Date.now()) return { ok: false, message: t('studio.schedule.inPast'), field };
         }
         if (!when) return { ok: false, message: t('studio.schedule.pickTime'), field };

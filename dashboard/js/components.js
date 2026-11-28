@@ -405,6 +405,40 @@ const UI = {
         if (typeof field.focus === 'function') field.focus();
     },
 
+    /** Tie a field to the error that explains it: `aria-invalid` plus the error's id in `aria-describedby` (its hint stays). */
+    linkError(field, errorId) {
+        if (!field || !errorId) return;
+        field.setAttribute('aria-invalid', 'true');
+        const ids = (field.getAttribute('aria-describedby') || '').split(/\s+/).filter(Boolean);
+        if (!ids.includes(errorId)) ids.push(errorId);
+        field.setAttribute('aria-describedby', ids.join(' '));
+    },
+
+    /** Undo `linkError`: the field is valid again and no longer points at the error. */
+    unlinkError(field, errorId) {
+        if (!field) return;
+        field.removeAttribute('aria-invalid');
+        const kept = (field.getAttribute('aria-describedby') || '').split(/\s+/).filter((id) => id && id !== errorId).join(' ');
+        if (kept) field.setAttribute('aria-describedby', kept);
+        else field.removeAttribute('aria-describedby');
+    },
+
+    /**
+     * Write one `.form-error` line into `host` (an element with an id), or clear it when `message` is empty. With `field` (an element or an
+     * id) the field is marked invalid and points at the line; whichever field the host linked last time is released first. `extra` is
+     * SafeHtml placed after the line.
+     */
+    formError(host, message, o = {}) {
+        if (!host) return;
+        const prior = host._errField;
+        const id = `${host.id || 'ui-form'}-msg`;
+        if (prior) { UI.unlinkError(prior, id); host._errField = null; }
+        if (!message) { host.innerHTML = ''; return; }
+        host.innerHTML = esc(html`<p class="form-error" id="${id}"${o.dir ? html` dir="${o.dir}"` : ''}${o.alert ? html.raw(' role="alert"') : ''}>${message}</p>${o.extra || ''}`);
+        const field = typeof o.field === 'string' ? document.getElementById(o.field) : o.field;
+        if (field) { UI.linkError(field, id); host._errField = field; }
+    },
+
     clearInvalid(root) {
         if (!root) return;
         root.querySelectorAll('[aria-invalid="true"]').forEach((el) => {
@@ -1865,7 +1899,17 @@ const UI = {
      */
     setZone(zone) {
         UI._zone = UI.validZone(zone) ? zone : '';
+        // A screen that has just read the workspace's zone from its own settings keeps the session's copy in step, so a changed setting
+        // is not overruled by the zone `/auth/me` carried when the page loaded.
+        if (UI._zone && typeof App !== 'undefined' && App && App.session && App.session.workspace) App.session.workspace.timezone = UI._zone;
         return UI._zone;
+    },
+
+    /** The zone `/auth/me` said the workspace keeps its times in (every role gets it, unlike Studio's settings), '' when it said none. */
+    sessionZone() {
+        const ws = typeof App !== 'undefined' && App && App.session && App.session.workspace;
+        const zone = ws && ws.timezone;
+        return UI.validZone(zone) ? zone : '';
     },
 
     /**
@@ -1874,7 +1918,7 @@ const UI = {
      */
     zone(candidate) {
         if (UI.validZone(candidate)) return candidate;
-        return UI._zone || UI.deviceZone();
+        return UI.sessionZone() || UI._zone || UI.deviceZone();
     },
 
     /** "Riyadh" / «الرياض»: the city part of an IANA zone, in the interface language when the catalogue has it. `zone` defaults to `UI.zone()`. */

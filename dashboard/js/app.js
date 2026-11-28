@@ -196,7 +196,7 @@ const App = {
     },
 
     /** Must match the `?v=` the rest of the assets are served with. */
-    ASSET_VERSION: '13.21',
+    ASSET_VERSION: '13.24',
 
     _modules: Object.create(null),
 
@@ -332,6 +332,42 @@ const App = {
         apply();
     },
 
+    /**
+     * `--sticky-top` / `--sticky-bottom` (styles.css, `html { scroll-padding-block }`): how much of the viewport the sticky chrome covers, so
+     * Tab and Shift+Tab scroll a focused field clear of it. The header is always sticky (a phone's two-row header included, measured live);
+     * the Settings tab bar sits under it; a save bar covers the bottom while it is on the page. Pages come and go, so the bars are
+     * looked up again whenever the DOM changes, and each is watched for a size change.
+     */
+    syncStickyInsets() {
+        if (typeof ResizeObserver !== 'function' || typeof MutationObserver !== 'function') return;
+        const root = document.documentElement.style;
+        const BOTTOM_BARS = '.studio-savebar, .welcome-bar, [data-sticky-bar]';
+        const watched = new Set();
+        const ro = new ResizeObserver(() => apply());
+        const height = (el) => (el && el.offsetParent !== null ? Math.ceil(el.getBoundingClientRect().height) : 0);
+        const apply = () => {
+            const header = document.querySelector('.page-header');
+            const tabbar = document.querySelector('.settings-tabbar');
+            let bottom = 0;
+            for (const bar of document.querySelectorAll(BOTTOM_BARS)) bottom = Math.max(bottom, height(bar));
+            const top = height(header) + height(tabbar);
+            root.setProperty('--sticky-top', `${top}px`);
+            root.setProperty('--sticky-bottom', bottom ? `${bottom + 12}px` : '0px');
+            for (const el of document.querySelectorAll(`.page-header, .settings-tabbar, ${BOTTOM_BARS}`)) {
+                if (!watched.has(el)) { watched.add(el); ro.observe(el); }
+            }
+            for (const el of watched) if (!el.isConnected) { watched.delete(el); ro.unobserve(el); }
+        };
+        let queued = false;
+        new MutationObserver(() => {
+            if (queued) return;
+            queued = true;
+            requestAnimationFrame(() => { queued = false; apply(); });
+        }).observe(document.body, { childList: true, subtree: true });
+        window.addEventListener('resize', apply);
+        apply();
+    },
+
     init() {
         I18N.init();
         I18N.applyStatic();
@@ -398,6 +434,7 @@ const App = {
         document.getElementById('logout-btn').addEventListener('click', () => this.logout());
 
         this.syncHeaderHeight();
+        this.syncStickyInsets();
 
         // Mobile menu — the sidebar becomes a fixed-position drawer at
         // ≤860px (see the `@media (max-width: 860px)` block in styles.css).
@@ -951,7 +988,7 @@ const App = {
         // A signed-out tab must not keep saying "(3)" in its title, nor the last page's name.
         this.setBaseTitle(this.appTitle());
         this.setInboxWaiting(0);
-        this.stopAdminStatusPoll();
+        this.stopAttentionPoll();
         this.rememberGated(false);
         // Lifted: the head script hid the login card from the first frame of an invite link (index.html), and this is where it is wanted.
         document.documentElement.removeAttribute('data-invite');
@@ -1106,7 +1143,7 @@ const App = {
         this.currentPage = null;
         this.setBaseTitle(this.appTitle());
         this.setInboxWaiting(0);
-        this.stopAdminStatusPoll();
+        this.stopAttentionPoll();
         this.settleFirstFrame();
         document.getElementById('login-screen').classList.add('hidden');
         document.getElementById('app').classList.add('hidden');
@@ -1337,7 +1374,7 @@ const App = {
         this.currentPage = null;
         this.setBaseTitle(this.appTitle());
         this.setInboxWaiting(0);
-        this.stopAdminStatusPoll();
+        this.stopAttentionPoll();
         document.documentElement.removeAttribute('data-invite');
         document.getElementById('login-screen').classList.add('hidden');
         document.getElementById('app').classList.add('hidden');
@@ -1454,10 +1491,8 @@ const App = {
         // Administration: its open/closed state follows the page on screen (or the one the address names, on the first paint), and the
         // dot that says the platform has a problem is polled for as long as this session is an admin's.
         this.syncAdminGroup(this.currentPage || this.pageFromHash());
-        if (admin) this.startAdminStatusPoll();
-        else this.stopAdminStatusPoll();
-        // The Studio's alarms (Claude signed out, the worker offline, drafts and clips waiting) are every session's, not the admin's.
-        this.startStudioAttentionPoll();
+        // One poll for every session (the Inbox count, the Studio's alarms, the dot): see "The one attention poll".
+        this.startAttentionPoll();
 
         // #app has just come out of `hidden`, so this is the first point at
         // which the nav has a measurable box. Placed, not animated.
@@ -1553,10 +1588,6 @@ const App = {
 
     // ─── Administration: the status dot ──────────────────────────────────────
 
-    /** How often the shell asks whether the platform has a problem, while the tab is visible. */
-    ADMIN_STATUS_MS: 120000,
-    _adminStatusTimer: null,
-
     /** `counts.platform` of a `GET /api/attention` answer, as a whole number: 0 when absent, which is every non-admin session. */
     platformProblemCount(summary) {
         const n = summary && summary.counts ? Math.floor(Number(summary.counts.platform)) : NaN;
@@ -1570,57 +1601,96 @@ const App = {
         dot.hidden = !(Number(count) > 0);
     },
 
+    // ─── The one attention poll (R4-F1, R1-T11) ──────────────────────────────
+
     /**
-     * Ask the server. Only an admin's session is asked (`counts.platform` is sent to nobody else). A failed read leaves the dot as it was:
-     * the Operations screen is the place that says why, and a 401 has already sent the person to the login.
+     * The shell asks `GET /api/attention` ONCE per beat, for every signed-in session, and every answer feeds all of it: the Inbox count and the tab
+     * title, the Studio's count and strip, and the admin dot. Platform admins ask every 2 minutes, everyone else every 5 (the rates each timer had; no
+     * one's was raised). Only while the tab is visible, and again, forced, when it becomes visible.
      */
-    async refreshAdminStatus() {
-        if (!this.isAdmin()) {
-            this.renderAdminStatus(0);
-            return;
-        }
+    ADMIN_STATUS_MS: 120000,
+    ATTENTION_MS: 300000,
+    _attentionTimer: null,
+    _attentionMs: 0,
+    _attentionSeq: 0,
+    _attentionVisibilityBound: false,
+
+    attentionIntervalMs() {
+        return this.isAdmin() ? this.ADMIN_STATUS_MS : this.ATTENTION_MS;
+    },
+
+    /** Paint everything one answer feeds. A count the answer does not carry leaves what was shown: a missing number is "unknown", never 0. */
+    applyAttention(summary) {
+        const inbox = summary && summary.counts ? Number(summary.counts.inbox) : NaN;
+        if (Number.isFinite(inbox)) this.setInboxWaiting(inbox);
+        this._studioAttention = summary;
+        this._studioAttentionAt = Date.now();
+        this.renderStudioNeeds();
+        this.renderStudioAlarm();
+        // `counts.platform` is sent to admins only, so a session that is not one has no dot.
+        this.renderAdminStatus(this.isAdmin() ? this.platformProblemCount(summary) : 0);
+    },
+
+    /**
+     * Read the shared answer (`API.getAttention`: one request in flight, 30 s cached unless `force`) and paint it. Returns the answer, or null when
+     * the read failed or a newer one superseded it. A failed read leaves what was shown: this is an alarm, and a failed read is not "all clear".
+     */
+    async refreshAttention(options = {}) {
+        const seq = ++this._attentionSeq;
         try {
-            const summary = await API.request('/attention');
-            if (!this.isAdmin()) return;
-            this.renderAdminStatus(this.platformProblemCount(summary));
-        } catch { /* keep what the dot said */ }
-    },
-
-    /** Start asking, once: now, then every ADMIN_STATUS_MS while the tab is visible. A second call while it runs changes nothing. */
-    startAdminStatusPoll() {
-        if (this._adminStatusTimer) return;
-        this.refreshAdminStatus();
-        this._adminStatusTimer = setInterval(() => {
-            if (document.visibilityState === 'visible') this.refreshAdminStatus();
-        }, this.ADMIN_STATUS_MS);
-    },
-
-    /** Stop asking and clear the dot: a signed-out tab, the wizard and a session that is not an admin's have none to show. */
-    stopAdminStatusPoll() {
-        if (this._adminStatusTimer) {
-            clearInterval(this._adminStatusTimer);
-            this._adminStatusTimer = null;
+            const summary = await API.getAttention({ force: options.force === true });
+            if (seq !== this._attentionSeq) return null;
+            this.applyAttention(summary);
+            return summary;
+        } catch {
+            return null;
         }
+    },
+
+    /** Start asking, once: now, then at the session's own rate while the tab is visible. A start at the same rate changes nothing. */
+    startAttentionPoll() {
+        const ms = this.attentionIntervalMs();
+        if (this._attentionTimer && this._attentionMs === ms) return;
+        if (this._attentionTimer) clearInterval(this._attentionTimer);
+        else this.refreshAttention();
+        this._attentionMs = ms;
+        this._attentionTimer = setInterval(() => {
+            if (document.visibilityState === 'visible') this.refreshAttention();
+        }, ms);
+        // A page's timer is a number, which has no unref; a test's is a Timeout, and must not keep its process alive for minutes.
+        if (this._attentionTimer && typeof this._attentionTimer.unref === 'function') this._attentionTimer.unref();
+        if (!this._attentionVisibilityBound && typeof document.addEventListener === 'function') {
+            this._attentionVisibilityBound = true;
+            document.addEventListener('visibilitychange', () => {
+                if (this._attentionTimer && document.visibilityState === 'visible') this.refreshAttention(); // the 30 s share applies: flipping tabs costs nothing
+            });
+        }
+    },
+
+    /** Stop asking and forget every answer: a signed-out tab, the wizard and another tenant have nothing to show. */
+    stopAttentionPoll() {
+        if (this._attentionTimer) {
+            clearInterval(this._attentionTimer);
+            this._attentionTimer = null;
+        }
+        this._attentionMs = 0;
+        this._attentionSeq += 1;
+        this._studioAttention = null;
+        this._studioAttentionAt = 0;
+        if (typeof API.forgetAttention === 'function') API.forgetAttention();
         this.renderAdminStatus(0);
-        // The Studio's alarm poll goes with it: every place that signs a session out (login, invite, the wizard) stops both, and a tab with no session has no alarms.
-        this.stopStudioAttentionPoll();
+        this.renderStudioNeeds();
+        this.renderStudioAlarm();
     },
 
     // ─── The Studio's alarms (research USE-1, USE-4) ─────────────────────────
 
-    /**
-     * How often the shell asks what in the Studio needs the owner, while the tab is visible. Slower than the admin dot: these are things that last
-     * hours (a Mac signed out, a draft left in the TikTok inbox), and the Overview and the Studio ask again themselves when opened.
-     */
-    STUDIO_ATTENTION_MS: 300000,
     /** The screens the alarm strip is drawn on: the Studio and its tabs. */
     STUDIO_PAGES: ['studio', 'monteur', 'infographics', 'explainers'],
     /** An answer younger than this is not asked for again when a Studio screen opens. */
     STUDIO_ATTENTION_FRESH_MS: 60000,
-    _studioTimer: null,
     _studioAttention: null,
     _studioAttentionAt: 0,
-    _studioAttentionSeq: 0,
 
     /** The Studio's items of the last answer, in the server's order: `Attention.studioItems`, or none while nothing has been read. */
     studioAlarmItems() {
@@ -1700,46 +1770,9 @@ const App = {
         UI.icons(host);
     },
 
-    /** Ask the server, then redraw the badge and the strip. A failed read leaves what was shown: this is an alarm, and a failed read is not "all clear". */
-    async refreshStudioAttention() {
-        const seq = ++this._studioAttentionSeq;
-        try {
-            const summary = await API.request('/attention');
-            if (seq !== this._studioAttentionSeq) return;
-            this._studioAttention = summary;
-            this._studioAttentionAt = Date.now();
-            this.renderStudioNeeds();
-            this.renderStudioAlarm();
-        } catch { /* keep what was shown */ }
-    },
-
     /** Opening a Studio screen: ask again unless the answer is fresh. */
     refreshStudioAttentionIfStale() {
-        if (Date.now() - this._studioAttentionAt >= this.STUDIO_ATTENTION_FRESH_MS) this.refreshStudioAttention();
-    },
-
-    /** Start asking, once: now, then every STUDIO_ATTENTION_MS while the tab is visible. */
-    startStudioAttentionPoll() {
-        if (this._studioTimer) return;
-        this.refreshStudioAttention();
-        this._studioTimer = setInterval(() => {
-            if (document.visibilityState === 'visible') this.refreshStudioAttention();
-        }, this.STUDIO_ATTENTION_MS);
-        // A page's timer is a number, which has no unref; a test's is a Timeout, and must not keep its process alive for five minutes.
-        if (this._studioTimer && typeof this._studioTimer.unref === 'function') this._studioTimer.unref();
-    },
-
-    /** Stop asking and forget the answer: a signed-out tab, the wizard and another tenant have none to show. */
-    stopStudioAttentionPoll() {
-        if (this._studioTimer) {
-            clearInterval(this._studioTimer);
-            this._studioTimer = null;
-        }
-        this._studioAttentionSeq += 1;
-        this._studioAttention = null;
-        this._studioAttentionAt = 0;
-        this.renderStudioNeeds();
-        this.renderStudioAlarm();
+        if (Date.now() - this._studioAttentionAt >= this.STUDIO_ATTENTION_FRESH_MS) this.refreshAttention();
     },
 
     /**
@@ -1913,8 +1946,8 @@ const App = {
         // The waiting count is the previous tenant's; the next inbox or Overview read restates it.
         this.setInboxWaiting(0);
         // So are the Studio's alarms: forget them, and ask again for the new tenant.
-        this.stopStudioAttentionPoll();
-        this.startStudioAttentionPoll();
+        this.stopAttentionPoll();
+        this.startAttentionPoll();
         Object.keys(this.pages).forEach((key) => {
             let instance;
             try {

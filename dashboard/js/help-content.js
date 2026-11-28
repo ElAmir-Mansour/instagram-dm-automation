@@ -162,7 +162,7 @@ const HelpContent = {
                     body: {
                         ar: [
                             'تبدأ شاشة **اليوم** بسطر واحد يجيب عن سؤال «هل يعمل كل شيء؟»: آخر تعليق وصل، وآخر رسالة خاصة، وهل تصل الأحداث من ميتا، وهل عامل الماك متصل. بعده تأتي البطاقات، وكل بطاقة فعل واحد ورابط يفتح هذه العناصر بالذات.',
-                            'القائمة كلها يبنيها الخادم، فهي الرقم نفسه الذي تراه على شارة «الرسائل» وعلى «الجدولة». لا تحسب الشاشة شيئًا بنفسها.',
+                            'القائمة كلها يبنيها الخادم، فهي الرقم نفسه الذي تراه على شارة «الرسائل». لا تحسب الشاشة شيئًا بنفسها.',
                             { dl: [
                                 ['منشورات فشل نشرها', 'تحت البطاقة سطر لكل سبب مع عدده وعمره (أو تاريخه بالسنة إن لم يحن موعده بعد): قاعدة تيك توك، أو منشور استبدلته عمدًا (لا شيء لإصلاحه، أرشِفه)، أو مشكلة في الوسائط. «أرشِف هذه» تضعها في «المؤرشفة» بضغطة واحدة ومعها «تراجع».'],
                                 ['فشل قديم', 'الفشل الذي مضى عليه أكثر من 14 يومًا يصبح سطرًا هادئًا بعدد فقط، لا بطاقة حمراء. يبقى محسوبًا في الجدولة حتى تؤرشفه.'],
@@ -172,7 +172,7 @@ const HelpContent = {
                         ],
                         en: [
                             '**Today** opens with one line that answers “is it working?”: the last comment that came in, the last DM, whether events are arriving from Meta, and whether the Mac worker is online. The cards come after it, each with one verb and a link that opens exactly those items.',
-                            'The whole list is built by the server, so it is the same number the **Inbox** badge and the **Scheduler** show. The screen counts nothing of its own.',
+                            'The whole list is built by the server, so it is the same number the **Inbox** badge shows. The screen counts nothing of its own.',
                             { dl: [
                                 ['Posts that failed', 'Under the card there is one line per reason with its count and age (or its date, with the year, for one whose time is still ahead): a TikTok rule, a post you replaced on purpose (nothing to fix: archive it), a media problem. **Archive these** puts them under Archived in one tap, with an **Undo**.'],
                                 ['Older failures', 'A failure more than 14 days old becomes one quiet line with a number, not a red card. It stays counted in the Scheduler until you archive it.'],
@@ -1707,7 +1707,7 @@ const HelpContent = {
                     body: {
                         ar: [
                             { ul: [
-                                'اختر **موعد النشر المطلوب** بتوقيت جهازك، واضغط **جدوِل**.',
+                                'اختر **موعد النشر** بتوقيت مساحة العمل (المذكور بجانب الحقل)، واضغط **جدوِل**.',
                                 'أو فعّل **انشر الآن بدل الجدولة** فيُنشر الآن.',
                                 'يفحص المُجدوِل المنشورات المستحقة كل دقيقة، فيُنشر المنشور خلال دقائق من موعده، وتحت كل منشور ترى متى يُتوقع نشره.',
                                 'ولو توقف الفحص المتكرر لأي سبب، يعود المُجدوِل إلى تشغيل واحد في اليوم الساعة 00:00 بتوقيت UTC (3 فجراً بتوقيت الرياض)، وعندها يُحسب اليوم لا الدقيقة.',
@@ -1716,7 +1716,7 @@ const HelpContent = {
                         ],
                         en: [
                             { ul: [
-                                'Pick the **Requested publish time**, in your device’s time zone, and press **Schedule**.',
+                                'Pick the **Publish time**, in your workspace’s time zone (named beside the field), and press **Schedule**.',
                                 'Or tick **Publish now instead of scheduling** and it goes out now.',
                                 'The scheduler checks for due posts every minute, so a post goes out within minutes of its time, and each card tells you when it expects to publish.',
                                 'If that frequent check ever stops, the scheduler falls back to one run a day at 00:00 UTC (3am in Riyadh), and then the date is what counts, not the minute.',
@@ -1814,7 +1814,7 @@ const HelpContent = {
                     title: { ar: 'تنظيف المنشورات الفاشلة والقديمة', en: 'Clearing failed and old posts' },
                     body: {
                         ar: [
-                            'المنشور الفاشل يبقى في الطابور ومعه سبب فشله، ويظل محسوبًا على شارة «الجدولة» وفي شاشة «اليوم» حتى تتصرف فيه. للتصرف طريقان:',
+                            'المنشور الفاشل يبقى في الطابور ومعه سبب فشله، ويظل محسوبًا في شاشة «اليوم» حتى تتصرف فيه. للتصرف طريقان:',
                             { ul: [
                                 '**أرشفة**: من بطاقة المنشور، أو من شاشة «اليوم» لعدة منشورات معًا. لا يُنشر المنشور بعد ذلك ولا يُحسب ضمن ما هو بحاجة إليك، ويبقى تحت **المؤرشفة** في الجدولة، ومنها تستعيده بزر **إلغاء الأرشفة** كما كان تمامًا.',
                                 'من تلقاء النظام: يؤرشف يوميًا ما فشل منذ أكثر من 30 يومًا. لا يحذف شيئًا، ويسجّل ذلك في سجل التدقيق. تغيّر المدة أو توقفه من **الإعدادات** ← **التنبيهات** ← **تنظيف العناصر القديمة تلقائيًا**.',
@@ -1822,7 +1822,7 @@ const HelpContent = {
                             'المحادثات القديمة التي كانت بحاجة إليك ولم يُتعامل معها بعد 30 يومًا تُميَّز بالطريقة نفسها بأنه تم التعامل معها، وتعود إلى قائمتك إن كتب صاحبها مجددًا.',
                         ],
                         en: [
-                            'A failed post stays in the queue with the reason it failed, and stays counted on the **Scheduler** badge and on **Today** until you deal with it. There are two ways:',
+                            'A failed post stays in the queue with the reason it failed, and stays counted on **Today** until you deal with it. There are two ways:',
                             { ul: [
                                 '**Archive:** from the post’s card, or from **Today** for several at once. The post is not published after that and no longer counts as needing you. It stays under **Archived** in the Scheduler, and **Unarchive** puts it back exactly as it was.',
                                 'By itself: once a day the system archives what failed more than 30 days ago. It deletes nothing, and records it in the audit log. Change the days, or switch it off, in **Settings** → **Notifications** → **Clear old items automatically**.',
@@ -5031,7 +5031,7 @@ const HelpContent = {
                                 'اترك **إنشاء أتمتة الكلمة المفتاحية أيضاً** مفعّلاً، لتصل الرسالة كل من يعلّق بالكلمة.',
                                 'اقرأ **ما الذي سيحدث**، واضغط زر الجدولة.',
                             ] },
-                            { note: 'الأوقات المقترحة بتوقيت المنطقة الزمنية التي في إعدادات الاستوديو، والوقت المخصص بتوقيت جهازك.' },
+                            { note: 'الأوقات المقترحة بتوقيت المنطقة الزمنية التي في إعدادات الاستوديو، والوقت المخصص بالتوقيت نفسه، توقيت مساحة العمل.' },
                         ],
                         en: [
                             { ol: [
@@ -5041,7 +5041,7 @@ const HelpContent = {
                                 'Leave **Also create the keyword automation** ticked, so everyone who comments the keyword gets the DM.',
                                 'Read **What will happen**, then press the schedule button.',
                             ] },
-                            { note: 'Suggested slots are in the time zone from the Studio settings; a custom time uses your device’s time zone.' },
+                            { note: 'Suggested slots are in the time zone from the Studio settings; a custom time uses the same zone, your workspace’s.' },
                         ],
                     },
                 },
@@ -5054,7 +5054,7 @@ const HelpContent = {
                                 'يُضاف منشور كاروسيل على إنستجرام وفيسبوك معاً في **الجدولة**، بالشرائح المرسومة ونص إنستجرام. حالاته في [[scheduling#statuses]].',
                                 'يُنشأ رد تلقائي للكلمة المفتاحية، إلا إذا كان لديك رد تلقائي مفعّل يردّ على الكلمة نفسها من قبل.',
                                 'تصبح المسودّة **مجدول** ويُغلق التعديل. تريد تغييرها؟ احذف المنشور من **الجدولة**.',
-                                '**افتح في المنشورات** يأخذك إلى المنشور.',
+                                '**افتح في الجدولة** يأخذك إلى المنشور.',
                             ] },
                         ],
                         en: [
@@ -5062,7 +5062,7 @@ const HelpContent = {
                                 'A carousel post for Instagram and Facebook together is added to the **Scheduler**, with the drawn slides and the Instagram caption. Its statuses are in [[scheduling#statuses]].',
                                 'A keyword reply is created, unless an active keyword reply already answers that keyword.',
                                 'The draft becomes **Scheduled** and editing closes. To change it, delete the post from the **Scheduler**.',
-                                '**Open in Posts** takes you to the post.',
+                                '**Open in Scheduler** takes you to the post.',
                             ] },
                         ],
                     },

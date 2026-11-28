@@ -423,7 +423,7 @@ const AdsProposalsPage = {
             </div>
             <div class="form-group">
                 <label class="form-label" for="adsprop-request">${t('ads.proposals.suggest.label')}</label>
-                <textarea class="form-input" id="adsprop-request" rows="4" maxlength="${this.MAX_REQUEST}" dir="auto" placeholder="${t('ads.proposals.suggest.placeholder')}"></textarea>
+                <textarea class="field-textarea" id="adsprop-request" rows="4" maxlength="${this.MAX_REQUEST}" dir="auto" placeholder="${t('ads.proposals.suggest.placeholder')}"></textarea>
                 <p class="form-hint">${t('ads.proposals.suggest.hint')}</p>
             </div>
             <div id="adsprop-suggest-error"></div>
@@ -439,7 +439,7 @@ const AdsProposalsPage = {
         const text = box ? String(box.value || '').trim() : '';
         const error = document.getElementById('adsprop-suggest-error');
         if (!text) {
-            if (error) error.innerHTML = esc(html`<p class="form-error">${t('ads.proposals.suggest.empty')}</p>`);
+            UI.formError(error, t('ads.proposals.suggest.empty'), { field: box });
             return;
         }
         try {
@@ -447,7 +447,7 @@ const AdsProposalsPage = {
             UI.closeModal();
             this.started(answer && answer.proposal);
         } catch (err) {
-            if (error) error.innerHTML = esc(html`<p class="form-error" dir="auto">${this.refusalText(err)}</p>`);
+            UI.formError(error, this.refusalText(err), { dir: 'auto', field: box });
         }
     },
 

@@ -421,11 +421,11 @@ const AdsRulesPage = {
             <div class="adsrule-form" id="adsrule-form">
                 <div class="form-group">
                     <label class="form-label" for="adsrule-f-name">${t('ads.rules.form.name')}</label>
-                    <input class="form-input" id="adsrule-f-name" maxlength="80" dir="auto" autocomplete="off" value="${d.name}">
+                    <input class="field" id="adsrule-f-name" maxlength="80" dir="auto" autocomplete="off" value="${d.name}">
                 </div>
                 <div class="form-group">
                     <label class="form-label" for="adsrule-f-level">${t('ads.rules.form.level')}</label>
-                    <select class="form-input" id="adsrule-f-level" data-change="adsrule:level">${this.LEVELS.map((l) => opt(l, t(`ads.rules.level.${l}`), d.level))}</select>
+                    <select class="select" id="adsrule-f-level" data-change="adsrule:level">${this.LEVELS.map((l) => opt(l, t(`ads.rules.level.${l}`), d.level))}</select>
                 </div>
                 <fieldset class="form-group fieldset-plain">
                     <legend class="form-label">${t('ads.rules.form.scope')}</legend>
@@ -444,12 +444,12 @@ const AdsRulesPage = {
                     <p class="form-hint">${t('ads.rules.form.conditionsHint')}</p>
                     ${d.conditions.map((c, i) => html`
                         <div class="adsrule-cond" id="adsrule-f-cond-${i}">
-                            <select class="form-input" id="adsrule-f-metric-${i}" aria-label="${t('ads.rules.form.metric')}" data-change="adsrule:redraw">${this.METRICS.map((m) => opt(m, t(`ads.rules.metric.${m}`), c.metric))}</select>
+                            <select class="select" id="adsrule-f-metric-${i}" aria-label="${t('ads.rules.form.metric')}" data-change="adsrule:redraw">${this.METRICS.map((m) => opt(m, t(`ads.rules.metric.${m}`), c.metric))}</select>
                             ${c.metric === 'rejected' ? '' : html`
-                                <select class="form-input" id="adsrule-f-op-${i}" aria-label="${t('ads.rules.form.op')}">${this.OPS.map((o) => opt(o, t(`ads.rules.op.${this.OP_KEY[o]}`), c.op))}</select>
-                                <input class="form-input" type="number" min="0" step="any" inputmode="decimal" id="adsrule-f-value-${i}" aria-label="${t('ads.rules.form.value')}" value="${c.value}">
+                                <select class="select" id="adsrule-f-op-${i}" aria-label="${t('ads.rules.form.op')}">${this.OPS.map((o) => opt(o, t(`ads.rules.op.${this.OP_KEY[o]}`), c.op))}</select>
+                                <input class="field" type="number" min="0" step="any" inputmode="decimal" id="adsrule-f-value-${i}" aria-label="${t('ads.rules.form.value')}" value="${c.value}">
                                 <span class="form-hint">${this.MONEY_METRICS.includes(c.metric) ? this.currency() : c.metric === 'ctr' ? '%' : ''}</span>
-                                <select class="form-input" id="adsrule-f-window-${i}" aria-label="${t('ads.rules.form.window')}">${this.WINDOWS.map((w) => opt(w, t(`ads.rules.window.${w}`), c.window))}</select>`}
+                                <select class="select" id="adsrule-f-window-${i}" aria-label="${t('ads.rules.form.window')}">${this.WINDOWS.map((w) => opt(w, t(`ads.rules.window.${w}`), c.window))}</select>`}
                             ${d.conditions.length > 1 ? UI.button({ variant: 'ghost', size: 'sm', icon: 'x', label: t('ads.rules.form.removeCondition'), action: 'adsrule:removeCondition', data: { index: String(i) } }) : ''}
                         </div>
                         <p class="form-hint">${t(`ads.rules.metric.${c.metric}.hint`)}</p>
@@ -461,9 +461,9 @@ const AdsRulesPage = {
                     <p class="form-hint">${t('ads.rules.form.minDataHint')}</p>
                     <div class="adsrule-cond">
                         <label class="form-label" for="adsrule-f-min-impressions">${t('ads.rules.form.minImpressions')}</label>
-                        <input class="form-input" type="number" min="0" step="1" inputmode="numeric" id="adsrule-f-min-impressions" value="${d.minData.impressions ?? ''}">
+                        <input class="field" type="number" min="0" step="1" inputmode="numeric" id="adsrule-f-min-impressions" value="${d.minData.impressions ?? ''}">
                         <label class="form-label" for="adsrule-f-min-spend">${t('ads.rules.form.minSpend', { currency: this.currency() })}</label>
-                        <input class="form-input" type="number" min="0" step="any" inputmode="decimal" id="adsrule-f-min-spend" value="${d.minData.spend ?? ''}">
+                        <input class="field" type="number" min="0" step="any" inputmode="decimal" id="adsrule-f-min-spend" value="${d.minData.spend ?? ''}">
                     </div>
                 </fieldset>
                 <fieldset class="form-group fieldset-plain">
@@ -474,7 +474,7 @@ const AdsRulesPage = {
                                 <p class="form-hint">${t(`ads.rules.effect.${e}.hint`)}</p></div></div>`)}
                     ${d.effect === 'lower_budget' || d.effect === 'raise_budget' ? html`
                         <label class="form-label" for="adsrule-f-percent">${t('ads.rules.form.percent')}</label>
-                        <input class="form-input" type="number" min="5" max="${d.effect === 'lower_budget' ? 90 : 100}" step="1" inputmode="numeric" id="adsrule-f-percent" value="${d.percent}">` : ''}
+                        <input class="field" type="number" min="5" max="${d.effect === 'lower_budget' ? 90 : 100}" step="1" inputmode="numeric" id="adsrule-f-percent" value="${d.percent}">` : ''}
                     <div class="check-row"><input type="checkbox" id="adsrule-f-notify" ${d.notify ? html.raw('checked') : ''}>
                         <div class="check-text"><label class="check-label" for="adsrule-f-notify">${t('ads.rules.effect.notify')}</label></div></div>
                 </fieldset>
@@ -491,7 +491,7 @@ const AdsRulesPage = {
 
     showFormError(text) {
         const box = document.getElementById('adsrule-f-error');
-        if (box) box.innerHTML = esc(html`<p class="form-error" role="alert">${text}</p>`);
+        UI.formError(box, text, { alert: true });
     },
 
     async save() {

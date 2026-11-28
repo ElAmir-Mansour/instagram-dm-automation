@@ -968,7 +968,8 @@
     'posts.cover.frameZero': 'اللقطة الأولى',
 
     // Scheduling honesty
-    'posts.schedule.label': 'موعد النشر المطلوب',
+    'posts.schedule.label': 'موعد النشر (بتوقيت {city})',
+    'posts.schedule.deviceZone': 'هذا الجهاز على توقيت {device}، والمواعيد هنا بتوقيت {city}.',
     'posts.schedule.truth': 'يُنشر المنشور خلال دقائق من الموعد الذي تختاره.',
     'posts.schedule.expectedDaily': 'سيُنشر في التشغيل اليومي التالي بعد موعدك: {when}',
     'posts.schedule.pastExpectedDaily': 'هذا الموعد مضى — سيُنشر في التشغيل اليومي التالي: {when}',
@@ -3357,7 +3358,7 @@
     'studio.schedule.done': 'جُدول في {when}.',
     'studio.schedule.scheduledTitle': 'مجدول',
     'studio.schedule.scheduledFor': 'يُنشر {when}',
-    'studio.schedule.openPosts': 'افتح في المنشورات',
+    'studio.schedule.openPosts': 'افتح في الجدولة',
     'studio.schedule.noTikTok': 'لا نشر على تيك توك.',
     'studio.tiktokCheck.title': 'تيك توك',
     'studio.tiktokCheck.queued': 'في طابور تيك توك. اضغط «انشر منشورات الكاروسيل المنتظرة على تيك توك» في الأعلى حين تكون جاهزاً.',
@@ -3626,7 +3627,7 @@
     'studio.schedule.sumNoDm': 'لا رسالة تلقائية لكلمة «{keyword}»',
     'studio.schedule.submitAt': 'جدوِل: {time}',
     'studio.schedule.zoneHint': 'الأوقات بتوقيت {city} ({zone})، من جدولك في الإعدادات.',
-    'studio.schedule.deviceZone': 'الوقت المخصص بتوقيت هذا الجهاز ({zone}).',
+    'studio.schedule.customZone': 'المواعيد بتوقيت {city}.',
     'studio.shot.cleanOnly': 'اللقطات النظيفة فقط',
     'studio.shot.cleanHint': 'يخفي اللقطات التي فيها أسهم أو خربشة أو شاشة تحميل.',
     'studio.shot.showing': 'المعروض {n} من {total}',

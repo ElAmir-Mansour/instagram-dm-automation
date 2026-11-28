@@ -3570,11 +3570,14 @@ const PostsPage = {
      * browser refusing the unchanged time.
      */
     scheduleFields(value, min) {
+        const zone = UI.zone();
+        const device = UI.deviceZone();
         return html`
             <div class="form-group" id="schedule-time-group">
-                <label class="form-label" for="post-scheduled-time">${t('posts.schedule.label')}</label>
+                <label class="form-label" for="post-scheduled-time">${t('posts.schedule.label', { city: UI.zoneCity(zone) })}</label>
                 <input type="datetime-local" class="field" id="post-scheduled-time" name="scheduled_time"
                        value="${value}" ${min ? html`min="${min}"` : ''} data-input="posts:refreshScheduleNote" data-guard-dirty required>
+                ${device !== zone ? html`<p class="form-hint" id="post-scheduled-zone-hint">${t('posts.schedule.deviceZone', { device: UI.zoneCity(device), city: UI.zoneCity(zone) })}</p>` : ''}
                 <div class="schedule-truth">
                     <i data-lucide="info" aria-hidden="true"></i>
                     <div>
@@ -3727,7 +3730,7 @@ const PostsPage = {
      */
     publishWindowText(win) {
         if (!win) return '';
-        const when = UI.formatDateTime(win.from);
+        const when = UI.formatDateTime(win.from, { zone: true });
         if (win.frequent) {
             return win.isPast
                 // The number in the copy comes FROM the constant. It used to be
@@ -3741,15 +3744,20 @@ const PostsPage = {
             : t('posts.schedule.expectedDaily', { when });
     },
 
+    /** What the time field holds (wall time in the workspace's zone, `UI.zone()`) as an ISO instant; null when it is not a time. */
+    readScheduleInput(value) {
+        return UI.zoneInput(value, UI.zone());
+    },
+
     scheduleNoteText(localValue) {
-        return this.publishWindowText(this.publishWindow(UI.fromLocalInputValue(localValue)));
+        return this.publishWindowText(this.publishWindow(this.readScheduleInput(localValue)));
     },
 
     refreshScheduleNote() {
         const input = document.getElementById('post-scheduled-time');
         const note = document.getElementById('schedule-actual');
         if (!input || !note) return;
-        const window = this.publishWindow(UI.fromLocalInputValue(input.value));
+        const window = this.publishWindow(this.readScheduleInput(input.value));
         note.textContent = this.scheduleNoteText(input.value);
         note.classList.toggle('is-warning', !!(window && window.isPast));
     },
@@ -4085,10 +4093,10 @@ const PostsPage = {
     },
 
     showCreateModal() {
-        // datetime-local shows and submits LOCAL wall time. toISOString() is UTC,
-        // so the old prefill was off by the whole UTC offset (UTC+3: two hours in
-        // the past for a "1 hour from now" default).
-        const defaultTime = UI.toLocalInputValue(new Date(Date.now() + 60 * 60 * 1000));
+        // datetime-local shows and submits wall time with no zone. toISOString() is UTC, so the old prefill was off by the whole
+        // UTC offset (UTC+3: two hours in the past for a "1 hour from now" default).
+        // The field is read and filled in the WORKSPACE's zone (`UI.zoneInputValue`), the zone the cards show, not the device's.
+        const defaultTime = UI.zoneInputValue(new Date(Date.now() + 60 * 60 * 1000), UI.zone());
         this.resetTikTokComposer(null);
         this.resetSlides(null);
         // The pair the last post was created with, so a daily routine starts where it left off.
@@ -4115,7 +4123,7 @@ const PostsPage = {
                 ${this.firstCommentField(null)}
                 ${this.tiktokTitleField()}
                 ${this.mediaFields({ post_type: prefs.type })}
-                ${this.scheduleFields(defaultTime, UI.toLocalInputValue(new Date()))}
+                ${this.scheduleFields(defaultTime, UI.zoneInputValue(new Date(), UI.zone()))}
                 <div class="form-group switch-row">
                     <label class="switch" for="post-publish-now">
                         <input type="checkbox" name="publish_now" id="post-publish-now" data-change="posts:toggleScheduleTime">
@@ -4306,7 +4314,7 @@ const PostsPage = {
         const post = this.posts.find((p) => p.id === id);
         if (!post) return;
 
-        const defaultTime = UI.toLocalInputValue(post.scheduled_time);
+        const defaultTime = UI.zoneInputValue(post.scheduled_time, UI.zone());
         // 'reel' is no longer offered; map legacy rows onto 'video', which
         // publishes identically to both platforms.
         const postType = post.post_type === 'reel' ? 'video' : post.post_type;
@@ -4598,7 +4606,7 @@ const PostsPage = {
             ...this.formPayload(form),
             scheduled_time: publishNow
                 ? new Date().toISOString()
-                : UI.fromLocalInputValue(scheduledRaw),
+                : this.readScheduleInput(scheduledRaw),
             publish_now: publishNow,
         };
 
@@ -4678,7 +4686,7 @@ const PostsPage = {
         event.preventDefault();
         const id = form.dataset.id;
         const data = new FormData(form);
-        const scheduledTime = UI.fromLocalInputValue(data.get('scheduled_time'));
+        const scheduledTime = this.readScheduleInput(data.get('scheduled_time'));
 
         if (!scheduledTime) {
             this.showFormError(t('posts.schedule.unreadable'), 'post-scheduled-time', '');
