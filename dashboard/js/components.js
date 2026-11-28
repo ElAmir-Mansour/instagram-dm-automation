@@ -1894,7 +1894,17 @@ const UI = {
      */
     setZone(zone) {
         UI._zone = UI.validZone(zone) ? zone : '';
+        // A screen that has just read the workspace's zone from its own settings keeps the session's copy in step, so a changed setting
+        // is not overruled by the zone `/auth/me` carried when the page loaded.
+        if (UI._zone && typeof App !== 'undefined' && App && App.session && App.session.workspace) App.session.workspace.timezone = UI._zone;
         return UI._zone;
+    },
+
+    /** The zone `/auth/me` said the workspace keeps its times in (every role gets it, unlike Studio's settings), '' when it said none. */
+    sessionZone() {
+        const ws = typeof App !== 'undefined' && App && App.session && App.session.workspace;
+        const zone = ws && ws.timezone;
+        return UI.validZone(zone) ? zone : '';
     },
 
     /**
@@ -1903,7 +1913,7 @@ const UI = {
      */
     zone(candidate) {
         if (UI.validZone(candidate)) return candidate;
-        return UI._zone || UI.deviceZone();
+        return UI.sessionZone() || UI._zone || UI.deviceZone();
     },
 
     /** "Riyadh" / «الرياض»: the city part of an IANA zone, in the interface language when the catalogue has it. `zone` defaults to `UI.zone()`. */
