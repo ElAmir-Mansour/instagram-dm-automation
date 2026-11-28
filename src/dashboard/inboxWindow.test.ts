@@ -292,6 +292,8 @@ describe('Inbox on a phone (860 px and below, a conversation open)', () => {
         assert.ok(text(markup).includes('left to reply'));
         const follows = String(Inbox.metaMarkup(quiet({ is_user_follow_business: true })));
         assert.ok(follows.includes('chat-meta-more') && !text(follows).includes('Follows you'), 'follows-you is behind More on a phone');
+        const notFollows = String(Inbox.metaMarkup(quiet({ is_user_follow_business: false })));
+        assert.ok(notFollows.includes('chat-meta-more') && !text(notFollows).includes('Does not follow you'), 'does-not-follow-you is behind More on a phone too');
     });
 
     it('the composer box has two rows, and the phone stylesheet keeps the hint to two lines and the actions in one row', () => {
