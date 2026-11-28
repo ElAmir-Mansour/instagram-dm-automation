@@ -228,7 +228,7 @@ function fakeEl(id: string): FakeEl {
 }
 
 interface UiApi {
-    formatDateTime(iso: unknown): string;
+    formatDateTime(iso: unknown, opts?: { zone?: boolean | string }): string;
     fromLocalInputValue(value: string): string | null;
     toLocalInputValue(iso: unknown): string;
 }
@@ -521,7 +521,7 @@ describe('PostsPage.publishWindow — when a scheduled post actually goes out', 
             assert.ok(win);
             assert.equal(win.isPast, true);
 
-            const when = UI.formatDateTime(win.from);
+            const when = UI.formatDateTime(win.from, { zone: true });
             const minutes = P.sweepLagMinutes();
             const pastKey = frequent ? 'posts.schedule.pastExpected' : 'posts.schedule.pastExpectedDaily';
             const fwdKey = frequent ? 'posts.schedule.expected' : 'posts.schedule.expectedDaily';
@@ -540,7 +540,7 @@ describe('PostsPage.publishWindow — when a scheduled post actually goes out', 
             assert.ok(win);
             assert.equal(win.isPast, false);
 
-            const when = UI.formatDateTime(win.from);
+            const when = UI.formatDateTime(win.from, { zone: true });
             const minutes = P.sweepLagMinutes();
             const fwdKey = frequent ? 'posts.schedule.expected' : 'posts.schedule.expectedDaily';
             const pastKey = frequent ? 'posts.schedule.pastExpected' : 'posts.schedule.pastExpectedDaily';
@@ -571,7 +571,7 @@ describe('PostsPage.publishWindow — when a scheduled post actually goes out', 
         const note = P.scheduleNoteText(local);
         assert.equal(
             note,
-            t('posts.schedule.expected', { when: UI.formatDateTime(win.from), minutes: 7 }),
+            t('posts.schedule.expected', { when: UI.formatDateTime(win.from, { zone: true }), minutes: 7 }),
             'the rendered note must carry the constant\'s value'
         );
         assert.ok(note.includes('7'), `the sentence must name 7 minutes, got: ${note}`);
@@ -594,8 +594,8 @@ describe('PostsPage.publishWindow — when a scheduled post actually goes out', 
             assert.ok(win);
             const note = P.scheduleNoteText(local);
             assert.ok(
-                note.includes(UI.formatDateTime(win.from)),
-                `frequent=${frequent}: expected the note to name ${UI.formatDateTime(win.from)}; got: ${note}`
+                note.includes(UI.formatDateTime(win.from, { zone: true })),
+                `frequent=${frequent}: expected the note to name ${UI.formatDateTime(win.from, { zone: true })}; got: ${note}`
             );
         }
     });
@@ -2850,7 +2850,7 @@ describe('StudioPage — Schedule', () => {
         assert.ok(!page.includes('data-action="studio:deleteDraft"'), 'and cannot be deleted');
     });
 
-    it('sends only what TikTok’s audit state allows, a custom time as UTC, and nothing while there are unsaved edits', async () => {
+    it('sends only what TikTok’s audit state allows, a custom time as UTC read in the workspace zone, and nothing while there are unsaved edits', async () => {
         const s = loadStudio();
         await openEditor(s);
         const S = s.Studio;
@@ -2858,7 +2858,8 @@ describe('StudioPage — Schedule', () => {
         assert.equal(S.readSchedule(fakeForm({ slot: slotA, tiktok: 'none' })).body.tiktok, 'none');
         assert.equal(S.readSchedule(fakeForm({ slot: slotA })).body.create_campaign, false);
         const custom = S.readSchedule(fakeForm({ slot: 'custom', custom_time: '2031-03-04T18:20' }));
-        assert.equal(custom.body.scheduled_time, new Date('2031-03-04T18:20').toISOString());
+        // Wall time in the WORKSPACE's zone (Riyadh, UTC+3, from the settings), not the browser's (R2-CA-7).
+        assert.equal(custom.body.scheduled_time, '2031-03-04T15:20:00.000Z');
         assert.equal(S.readSchedule(fakeForm({ slot: 'custom', custom_time: '2020-01-01T10:00' })).ok, false, 'not in the past');
         S.status = studioStatus({ tiktok: { audited: true, queued: 0 } });
         assert.equal(S.readSchedule(fakeForm({ slot: slotA, tiktok: 'queue' })).body.tiktok, 'scheduled', 'audited: posted at the same time');

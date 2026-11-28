@@ -1071,7 +1071,7 @@ describe('GET /api/auth/me: modules and workspace (U3)', () => {
         const { status, body } = await me({ userId: ADMIN_USER, role: 'user', tenantId: TENANT_A });
         assert.equal(status, 200);
         assert.deepEqual(body.modules, MODULE_IDS.filter((id) => id !== 'knowledge'));
-        assert.deepEqual(body.workspace, { owner: true, metaConnect: 'operator' });
+        assert.deepEqual(body.workspace, { owner: true, metaConnect: 'operator', timezone: 'UTC' });
         // Nothing else moved.
         assert.deepEqual(Object.keys(body).sort(), ['modules', 'onboarding', 'role', 'tenantId', 'tenantRole', 'tenants', 'userId', 'workspace']);
         assert.equal(body.userId, ADMIN_USER);
@@ -1089,13 +1089,27 @@ describe('GET /api/auth/me: modules and workspace (U3)', () => {
         settings.set(`tenant.modules.${COMPANY_TENANT}`, COMPANY_DOC);
         const { body } = await me({ userId: ADMIN_USER, role: 'user', tenantId: COMPANY_TENANT });
         assert.deepEqual(body.modules, ['inbox', 'keyword_replies', 'dm_assistant', 'scheduler', 'results']);
-        assert.deepEqual(body.workspace, { owner: false, metaConnect: 'self' });
+        assert.deepEqual(body.workspace, { owner: false, metaConnect: 'self', timezone: 'UTC' });
     });
 
     it('a workspace with no document is legacy: everything it had, so nobody loses a screen on deploy', async () => {
         const { body } = await me({ userId: ADMIN_USER, role: 'user', tenantId: COMPANY_TENANT });
         assert.equal(body.modules.length, 11);
-        assert.deepEqual(body.workspace, { owner: false, metaConnect: 'operator' });
+        assert.deepEqual(body.workspace, { owner: false, metaConnect: 'operator', timezone: 'UTC' });
+    });
+
+    it('carries the workspace\'s time zone for every role (R2-SC-1): the profile\'s identity.timezone, which Studio settings call schedule.timezone', async () => {
+        db.routes.unshift([/FROM creator_profiles WHERE creator_id/, () => ({ rows: [{ profile_schema: 1, identity_timezone: 'Asia/Riyadh' }] })]);
+        settings.set(`tenant.modules.${COMPANY_TENANT}`, COMPANY_DOC);
+        const viewer = await me({ userId: ADMIN_USER, role: 'user', tenantId: COMPANY_TENANT });
+        assert.equal(viewer.body.workspace.timezone, 'Asia/Riyadh');
+    });
+
+    it('a zone that cannot be read is \'\' and never an error: the dashboard keeps the zone it had', async () => {
+        db.routes.unshift([/FROM studio_settings WHERE creator_id/, () => { throw new Error('connection terminated'); }]);
+        const { status, body } = await me({ userId: ADMIN_USER, role: 'user', tenantId: COMPANY_TENANT });
+        assert.equal(status, 200);
+        assert.equal(body.workspace.timezone, '');
     });
 
     it('both are null with no tenant, and null (not an error) when the modules cannot be read: the dashboard then hides nothing', async () => {

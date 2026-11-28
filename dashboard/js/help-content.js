@@ -1707,7 +1707,7 @@ const HelpContent = {
                     body: {
                         ar: [
                             { ul: [
-                                'اختر **موعد النشر المطلوب** بتوقيت جهازك، واضغط **جدوِل**.',
+                                'اختر **موعد النشر** بتوقيت مساحة العمل (المذكور بجانب الحقل)، واضغط **جدوِل**.',
                                 'أو فعّل **انشر الآن بدل الجدولة** فيُنشر الآن.',
                                 'يفحص المُجدوِل المنشورات المستحقة كل دقيقة، فيُنشر المنشور خلال دقائق من موعده، وتحت كل منشور ترى متى يُتوقع نشره.',
                                 'ولو توقف الفحص المتكرر لأي سبب، يعود المُجدوِل إلى تشغيل واحد في اليوم الساعة 00:00 بتوقيت UTC (3 فجراً بتوقيت الرياض)، وعندها يُحسب اليوم لا الدقيقة.',
@@ -1716,7 +1716,7 @@ const HelpContent = {
                         ],
                         en: [
                             { ul: [
-                                'Pick the **Requested publish time**, in your device’s time zone, and press **Schedule**.',
+                                'Pick the **Publish time**, in your workspace’s time zone (named beside the field), and press **Schedule**.',
                                 'Or tick **Publish now instead of scheduling** and it goes out now.',
                                 'The scheduler checks for due posts every minute, so a post goes out within minutes of its time, and each card tells you when it expects to publish.',
                                 'If that frequent check ever stops, the scheduler falls back to one run a day at 00:00 UTC (3am in Riyadh), and then the date is what counts, not the minute.',
@@ -5031,7 +5031,7 @@ const HelpContent = {
                                 'اترك **إنشاء أتمتة الكلمة المفتاحية أيضاً** مفعّلاً، لتصل الرسالة كل من يعلّق بالكلمة.',
                                 'اقرأ **ما الذي سيحدث**، واضغط زر الجدولة.',
                             ] },
-                            { note: 'الأوقات المقترحة بتوقيت المنطقة الزمنية التي في إعدادات الاستوديو، والوقت المخصص بتوقيت جهازك.' },
+                            { note: 'الأوقات المقترحة بتوقيت المنطقة الزمنية التي في إعدادات الاستوديو، والوقت المخصص بالتوقيت نفسه، توقيت مساحة العمل.' },
                         ],
                         en: [
                             { ol: [
@@ -5041,7 +5041,7 @@ const HelpContent = {
                                 'Leave **Also create the keyword automation** ticked, so everyone who comments the keyword gets the DM.',
                                 'Read **What will happen**, then press the schedule button.',
                             ] },
-                            { note: 'Suggested slots are in the time zone from the Studio settings; a custom time uses your device’s time zone.' },
+                            { note: 'Suggested slots are in the time zone from the Studio settings; a custom time uses the same zone, your workspace’s.' },
                         ],
                     },
                 },
@@ -5054,7 +5054,7 @@ const HelpContent = {
                                 'يُضاف منشور كاروسيل على إنستجرام وفيسبوك معاً في **الجدولة**، بالشرائح المرسومة ونص إنستجرام. حالاته في [[scheduling#statuses]].',
                                 'يُنشأ رد تلقائي للكلمة المفتاحية، إلا إذا كان لديك رد تلقائي مفعّل يردّ على الكلمة نفسها من قبل.',
                                 'تصبح المسودّة **مجدول** ويُغلق التعديل. تريد تغييرها؟ احذف المنشور من **الجدولة**.',
-                                '**افتح في المنشورات** يأخذك إلى المنشور.',
+                                '**افتح في الجدولة** يأخذك إلى المنشور.',
                             ] },
                         ],
                         en: [
@@ -5062,7 +5062,7 @@ const HelpContent = {
                                 'A carousel post for Instagram and Facebook together is added to the **Scheduler**, with the drawn slides and the Instagram caption. Its statuses are in [[scheduling#statuses]].',
                                 'A keyword reply is created, unless an active keyword reply already answers that keyword.',
                                 'The draft becomes **Scheduled** and editing closes. To change it, delete the post from the **Scheduler**.',
-                                '**Open in Posts** takes you to the post.',
+                                '**Open in Scheduler** takes you to the post.',
                             ] },
                         ],
                     },
