@@ -834,6 +834,7 @@ const AdsCampaignsPage = {
             body: t('ads.camp.delete.body', { name: this.isolate(o.name || o.id) }),
             hint: t('ads.camp.delete.hint'),
             confirmLabel: t('ads.camp.act.delete'),
+            confirmIcon: 'trash-2',
             onConfirm: () => AdsCampaignsPage.removeConfirmed(String(o.id)),
         });
     },

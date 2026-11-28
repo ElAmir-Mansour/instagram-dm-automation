@@ -206,7 +206,7 @@ describe('Settings → Media storage: Cloudflare R2', () => {
         it(`once set up: the choice, this month's meters against each limit, the reset date, the copy progress, and never the secret (${lang})`, () => {
             const { render, t } = load(lang);
             const card = render(WITH_R2(R2_ON, { backend: 'supabase', choice: 'supabase' }));
-            assert.ok(card.includes('name="media-backend"') && card.includes('data-change="settings:setMediaBackend"'));
+            assert.ok(card.includes('name="media-backend"') && card.includes('data-action="settings:setMediaBackend"') && !card.includes('data-change="settings:setMediaBackend"'));
             assert.match(card, /id="media-backend-supabase"[^>]*checked/);
             assert.ok(!/id="media-backend-r2"[^>]*checked/.test(card));
             for (const kind of ['storage', 'class_a', 'class_b']) {

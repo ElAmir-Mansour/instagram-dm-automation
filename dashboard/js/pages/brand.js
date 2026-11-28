@@ -668,6 +668,7 @@ const BrandPage = {
             title: t('brand.logo.remove'),
             body: t('brand.logo.removeConfirm'),
             confirmLabel: t('brand.logo.remove'),
+            confirmIcon: 'trash-2',
             onConfirm: () => this.doRemove(),
         });
     },

@@ -4045,6 +4045,7 @@ const PostsPage = {
             body: t('boost.delete.body'),
             hint: t('boost.delete.hint'),
             confirmLabel: t('common.delete'),
+            confirmIcon: 'trash-2',
             onConfirm: () => PostsPage.boostDeleteConfirmed(id),
         });
     },
@@ -4802,6 +4803,7 @@ const PostsPage = {
             body: isLog ? t('posts.deleteLogConfirm') : t('posts.deleteConfirm'),
             hint: isLog ? t('posts.deleteLogHint') : t('posts.deleteHint'),
             confirmLabel: t('common.delete'),
+            confirmIcon: 'trash-2',
             onConfirm: () => PostsPage.deletePostConfirmed(id),
         });
     },

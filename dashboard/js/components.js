@@ -93,6 +93,9 @@ const DATA_KEY = /^[a-z][a-z0-9-]*$/;
 
 const UI = {
     _modalSeq: 0,
+    /** Moves every time a dialog is drawn: tells a confirm whether the dialog under it is still the one it was asked over. */
+    _modalGen: 0,
+    _confirmClosesModal: null,
     _lastFocus: null,
     _lastFocusKey: null,
     _onModalKeydown: null,
@@ -983,6 +986,7 @@ const UI = {
         if (!overlay || !content) return;
         // A modal that is replaced is closed as far as whoever opened it is concerned.
         UI._runAfterClose();
+        UI._modalGen += 1;
 
         if (overlay.classList.contains('hidden')) {
             UI._lastFocus = document.activeElement;
@@ -1142,6 +1146,7 @@ const UI = {
             title: t('ui.discard.title'),
             body: t('common.discardConfirm'),
             confirmLabel: t('ui.discard.confirm'),
+            confirmIcon: 'x',
             cancelLabel: t('ui.discard.keep'),
             onConfirm: () => UI.closeModal(),
         });
@@ -2100,7 +2105,7 @@ const UI = {
      *   UI.pageHeader({ title, subtitle, back, actions, help })
      *   UI.card({ title, actions, body, tone })
      *   UI.emptyState({ icon, title, body, action, secondary, help })
-     *   UI.confirm({ title, body, hint, confirmLabel, tone, requireText, onConfirm })
+     *   UI.confirm({ title, body, hint, confirmLabel, confirmIcon, tone, requireText, onConfirm })
      *   UI.undoToast(message, { onUndo, seconds })                    -> Promise<boolean>
      *   UI.tabs(items, { mode, current })
      *   UI.secretField({ id, label, status, onReplace, onRemove, generate })
@@ -2348,11 +2353,15 @@ const UI = {
      *   title        heading
      *   body         what will happen, in one sentence
      *   hint         the consequence that is not obvious
-     *   confirmLabel a VERB
+     *   confirmLabel a VERB that names this question's own action (required: there is no "Delete" fallback)
+     *   confirmIcon  a Lucide icon name for that action (required, same reason)
      *   cancelLabel  the way out, when "Cancel" is not the honest word ("Keep editing")
      *   tone         'danger' (default) or 'primary'
      *   requireText  the operator must type this string to enable the button
-     *   stack        draw it over the open modal instead of in place of it (the discard question)
+     *   stack        draw it over the open modal instead of in place of it. Default: true whenever a modal is open, so Cancel
+     *                comes back to the dialog (and to what it shows once, like an invite link). `stack: false` replaces it.
+     *                A question that was stacked only by that default also closes the dialog under it once it is confirmed,
+     *                as a question drawn in place always did; an explicit `stack: true` leaves the dialog to the caller.
      *   onCancel()   stacked only: runs when the question is answered "no" (Cancel, Escape, a click outside), so a caller
      *                waiting on the answer (the router's leave guard) hears it. In place of the modal, `UI._afterClose` does that.
      *   onConfirm()  runs after the button is pressed; a promise keeps the dialog open until it settles
@@ -2366,18 +2375,26 @@ const UI = {
      */
     confirm(options) {
         const o = options || {};
+        if (!o.confirmLabel || !o.confirmIcon) {
+            console.error('UI.confirm needs confirmLabel and confirmIcon naming its own action:', o.title);
+        }
+        const overlay = typeof document !== 'undefined' ? document.getElementById('modal-overlay') : null;
+        const modalOpen = !!overlay && !overlay.classList.contains('hidden');
+        const stack = o.stack === undefined ? modalOpen : !!o.stack;
         UI._confirmPending = typeof o.onConfirm === 'function' ? o.onConfirm : null;
         // A question already on screen that this one replaces was not answered "yes": tell whoever asked it.
-        if (o.stack) UI._answerCancel();
-        UI._confirmCancel = o.stack && typeof o.onCancel === 'function' ? o.onCancel : null;
-        const markup = UI._confirmMarkup(o, !!o.stack);
-        if (o.stack) UI._openConfirmLayer(markup);
+        if (stack) UI._answerCancel();
+        UI._confirmCancel = stack && typeof o.onCancel === 'function' ? o.onCancel : null;
+        // Stacked by default (not asked for): a "yes" ends the work of the dialog under it too, unless the work opened another.
+        UI._confirmClosesModal = stack && o.stack === undefined ? UI._modalGen : null;
+        const markup = UI._confirmMarkup(o, stack);
+        if (stack) UI._openConfirmLayer(markup);
         else UI.showModal(markup);
     },
 
     _confirmMarkup(o, stacked) {
         const gated = !!o.requireText;
-        const confirmIcon = o.confirmIcon === undefined ? 'trash-2' : o.confirmIcon;
+        const confirmIcon = o.confirmIcon || '';
         const confirmClass = `btn ${BUTTON_VARIANTS[o.tone === 'primary' ? 'primary' : 'danger']}`;
         const cancelClass = `btn ${BUTTON_VARIANTS.secondary}`;
         // In place of the modal, the way out is the modal's own close (which asks about unsaved work);
@@ -2406,7 +2423,7 @@ const UI = {
                 <button type="button" class="${cancelClass}" data-action="${closeAction}">${o.cancelLabel || t('common.cancel')}</button>
                 <button type="button" class="${confirmClass}" id="admin-confirm-btn"
                         data-action="ui:runConfirm" ${gated ? html.raw('disabled') : ''}>
-                    <i data-lucide="${confirmIcon}" aria-hidden="true"></i> ${o.confirmLabel || t('common.delete')}
+                    ${confirmIcon ? html`<i data-lucide="${confirmIcon}" aria-hidden="true"></i> ` : ''}${o.confirmLabel || o.title}
                 </button>
             </div>
         `;
@@ -2469,8 +2486,13 @@ const UI = {
         const layered = !!UI._confirmLayer;
         const done = () => {
             // Answered "yes": the cancel hook must never also run.
-            if (layered) { UI._confirmCancel = null; UI._closeConfirmLayer(true); }
-            else UI.closeModal();
+            if (layered) {
+                const underGen = UI._confirmClosesModal;
+                UI._confirmCancel = null;
+                UI._confirmClosesModal = null;
+                UI._closeConfirmLayer(true);
+                if (underGen !== null && underGen === UI._modalGen) UI.closeModal();
+            } else UI.closeModal();
         };
 
         const fn = UI._confirmPending;
@@ -3073,6 +3095,7 @@ const UI = {
             title: t('ui.secret.removeTitle'),
             body: t('ui.secret.removeBody'),
             confirmLabel: t('ui.secret.remove'),
+            confirmIcon: 'x',
             onConfirm: () => entry.onRemove(),
         });
     },
