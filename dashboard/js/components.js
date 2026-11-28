@@ -716,6 +716,8 @@ const UI = {
     explainMetaError(raw) {
         const text = String(raw || '');
         if (!text) return '';
+        // A closed messaging window is code 10 too, and is not "permission": its wording (or its subcode, when the text carries one) says so first.
+        if (UI.failureCode(text) === 'DM_WINDOW_CLOSED') return t('failure.DM_WINDOW_CLOSED');
         const codes = [...text.matchAll(/\bCode:?\s*(\d+)/gi)].map((m) => Number(m[1]));
         // The pipeline's own wording for these carries no code of its own
         // (and Instagram reports the second as -1).
@@ -1597,6 +1599,9 @@ const UI = {
      * with the text behind Details, which is wrong only in being less helpful.
      */
     FAILURE_PATTERNS: Object.freeze([
+        // A DM refused for Meta's messaging window (code 10, subcode 2018278 on Messenger or 2534022 on Instagram). Said before every Meta pattern: code 10 alone
+        // reads as "permission", which a closed window is not (R1-I1).
+        [/outside (?:of )?(?:the )?allowed window|\b(?:2018278|2534022)\b/i, 'DM_WINDOW_CLOSED'],
         [/payload too large|exceeded the maximum allowed size|"statusCode"\s*:\s*"?413\b|\bHTTP\s*413\b/i, 'STORAGE_FILE_TOO_LARGE'],
         // Claude on the Mac signed out: whole sign-in messages, so a script ABOUT oauth that failed is not taken for one (writing.ts SIGN_IN_FAILURES).
         [/failed to authenticate|oauth (?:session|token) (?:has )?expired|\bnot logged in\b|please run \/login|invalid api key\s*[·\-–—]\s*please run|\bauthentication_error\b/i, 'MAC_SIGNED_OUT'],

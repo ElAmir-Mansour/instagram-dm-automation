@@ -539,6 +539,8 @@ const API = {
         ).toString();
         return API.request(`/conversations${query ? `?${query}` : ''}`);
     },
+    /** One conversation as the list's item (`GET /conversations/:id`): what a reloaded or shared `#/inbox?c=<id>` opens when the thread is older than the newest 100. */
+    getConversation: (id) => API.request(`/conversations/${encodeURIComponent(id)}`),
     /**
      * `{ limit, before, since }`, each optional. With none the route answers the newest 100 (what a dashboard cached from before pages
      * asks for); the inbox opens a thread on `limit`, pages up with `limit` + `before` (a message id) and polls with `since` (a time).

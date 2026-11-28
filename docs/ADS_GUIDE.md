@@ -293,7 +293,7 @@ Meta ads; both off by default, `src/services/ads/switches.ts`):
   refused. Nothing is retried; the conversation is marked `business_ai_owns_thread` and one `business_ai` alert goes out. The fix
   is in Meta Business Suite → Business AI → "Take control of conversations with your Business AI".
 
-The Help Center has the same in Help → Ads (message-ads-inbox, bot-and-ads, reply-window, business-ai).
+The Help Center has the same in Help → Ads (message-ads-inbox, bot-and-ads, reply-window); the Business AI section is in Help → The Inbox (business-ai).
 
 ### Checklist before you press Activate
 

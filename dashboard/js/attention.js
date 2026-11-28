@@ -150,6 +150,36 @@ const Attention = {
     },
 
     /**
+     * When a reply typed in the Inbox stops being accepted, in ms, or null when nobody knows (the customer has not written). It is the SERVER's
+     * rule, sent as `reply_window_ends_at` (`src/services/replyWindow.ts`: 24 h from the customer's last message, or an ad conversation's longer
+     * window when the owner switched that on), because the server refuses a send past it. A copy of the list from before the field existed has
+     * only the last message, and gets the standard 24 hours from it. `windowLeftMs` is the same standard count and stays what the rows' countdown
+     * and the nav badge read; this is what the composer reads.
+     */
+    replyWindowEndsMs(thread) {
+        if (!thread) return null;
+        const given = Date.parse(thread.reply_window_ends_at);
+        if (Number.isFinite(given)) return given;
+        const at = Date.parse(thread.last_inbound_message_at || thread.last_inbound_at);
+        return Number.isFinite(at) ? at + Attention.WINDOW_MS : null;
+    },
+
+    /** Milliseconds left to reply from the Inbox, 0 once past, null when not known. See `replyWindowEndsMs`. */
+    replyWindowLeftMs(thread, now = Date.now()) {
+        const ends = Attention.replyWindowEndsMs(thread);
+        return ends === null ? null : Math.max(0, ends - now);
+    },
+
+    /**
+     * A reply from here can no longer reach this customer: Instagram or Facebook, and the window is known to have closed. Never true for WhatsApp
+     * (its window is its own, and the server answers it), nor for a thread whose last customer message is not known.
+     */
+    replyClosed(thread, now = Date.now()) {
+        if (!thread || thread.platform === 'whatsapp') return false;
+        return Attention.replyWindowLeftMs(thread, now) === 0;
+    },
+
+    /**
      * Who would answer this thread's next message, as one word (UX audit IN-02). `aiSettings` is `GET /api/settings/ai`
      * (`is_active`, `sales_mode`, `sales_test_senders`), or null while it has not been read.
      *

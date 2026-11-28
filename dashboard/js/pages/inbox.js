@@ -138,6 +138,8 @@ const InboxPage = {
     })),
     /** A conversation id as the alert's link carries it (`#/inbox?c=<id>`); anything else in the hash is data. */
     ID_PATTERN: /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+    /** The width at and below which the Inbox shows one pane at a time (the same line as the stylesheet's, aligned with the sidebar drawer). */
+    PHONE_QUERY: '(max-width: 860px)',
     /** Hidden for longer than this, the list on return is old news, and the reload says so. */
     RETURN_NOTICE_MS: 60 * 1000,
 
@@ -233,6 +235,16 @@ const InboxPage = {
     funnel: { open: false, days: 30, data: null, failed: false, loading: false, seq: 0, at: 0 },
     /** The conversation the page was opened on (`#/inbox?c=<id>`, the link in the owner's alert), until the list has loaded and it is opened. */
     _deepLinkId: '',
+    /** An unsent reply for each conversation (id -> text), kept while the page is open: Back to the list and into another thread loses none. */
+    _drafts: new Map(),
+    /** The conversation whose address this page PUSHED as a history entry (phones), so Back can pop it; '' when the address was written in place. */
+    _pushedFor: '',
+    /** A conversation the list does not hold (a reloaded or shared `?c=` for a thread older than the newest 100), fetched alone. */
+    _linked: null,
+    /** Whose "More about" chips are open on a phone (a thread id), and the media-query list and listener that repaint at the breakpoint. */
+    _metaMoreFor: '',
+    _phoneQuery: null,
+    _onPhoneChange: null,
     renderedMessageIds: new Set(),
     lastMessageStamp: null,
     chatShellThreadId: null,
@@ -274,6 +286,7 @@ const InboxPage = {
     /** What the header's handled slot, the composer's window offer and the strip last wrote, so an idle poll writes nothing. */
     _handledMarkup: null,
     _windowOfferMarkup: null,
+    _composerHandledMarkup: null,
     _stripMarkup: null,
 
     /** Threads whose profile this visit has already asked the server about: once each, whatever the answer. */
@@ -412,6 +425,45 @@ const InboxPage = {
         // Focus is the operator looking again: back to the fast poll.
         this.onWindowFocus = () => this.resetBackoff();
         if (typeof window !== 'undefined' && window.addEventListener) window.addEventListener('focus', this.onWindowFocus);
+
+        // The phone layout shows fewer chips and a shorter placeholder: crossing the breakpoint (a rotated tablet, a resized window) repaints them.
+        this.unbindPhoneQuery();
+        try {
+            if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
+                this._phoneQuery = window.matchMedia(this.PHONE_QUERY);
+                this._onPhoneChange = () => this.repaintResponsive();
+                if (typeof this._phoneQuery.addEventListener === 'function') this._phoneQuery.addEventListener('change', this._onPhoneChange);
+            }
+        } catch { this._phoneQuery = null; this._onPhoneChange = null; }
+    },
+
+    unbindPhoneQuery() {
+        if (this._phoneQuery && this._onPhoneChange && typeof this._phoneQuery.removeEventListener === 'function') {
+            this._phoneQuery.removeEventListener('change', this._onPhoneChange);
+        }
+        this._phoneQuery = null;
+        this._onPhoneChange = null;
+    },
+
+    /** One-pane layout (860 px and below): the same line as the stylesheet's `@media (max-width: 860px)`. False where `matchMedia` is missing. */
+    isPhone() {
+        try {
+            return typeof window !== 'undefined' && typeof window.matchMedia === 'function' && window.matchMedia(this.PHONE_QUERY).matches === true;
+        } catch { return false; }
+    },
+
+    /** What depends on the breakpoint, redrawn for the open thread: the chip strip and the placeholder. */
+    repaintResponsive() {
+        const thread = this.selectedConversationId ? this.findThread(this.selectedConversationId) : null;
+        if (!thread || this.chatShellThreadId !== thread.id) return;
+        this._metaMarkup = null;
+        this.paintMeta(thread);
+        const input = document.getElementById('chat-input-text');
+        if (input) input.placeholder = this.placeholderText();
+    },
+
+    placeholderText() {
+        return this.isPhone() ? t('inbox.replyPlaceholderShort') : t('inbox.replyPlaceholder');
     },
 
     /**
@@ -439,6 +491,7 @@ const InboxPage = {
         this.assistant = null;
         this._handledMarkup = null;
         this._windowOfferMarkup = null;
+        this._composerHandledMarkup = null;
         this._stripMarkup = null;
         this._profileAsked = new Set();
         this._backfilled = false;
@@ -450,6 +503,10 @@ const InboxPage = {
         this.filter = this.DEFAULT_FILTER;
         this.moreOpen = false;
         this._deepLinkId = '';
+        this._drafts = new Map();
+        this._pushedFor = '';
+        this._linked = null;
+        this._metaMoreFor = '';
         this._pollFailures = 0;
         this._unchangedTicks = 0;
         this._listSignature = null;
@@ -487,6 +544,7 @@ const InboxPage = {
     destroy() {
         this.stopPolling();
         this.unbindImageGuard();
+        this.unbindPhoneQuery();
         if (this.onVisibilityChange) {
             document.removeEventListener('visibilitychange', this.onVisibilityChange);
             this.onVisibilityChange = null;
@@ -740,9 +798,25 @@ const InboxPage = {
     /** The countdown for a thread that needs a person: its words, or '' for any other thread and for one with no message from the customer. */
     windowText(thread, now = Date.now()) {
         if (!Attention.needsHuman(thread)) return '';
-        const ms = Attention.windowLeftMs(thread, now);
+        const ms = Attention.replyWindowLeftMs(thread, now);
         if (ms === null) return '';
         return ms <= 0 ? t('inbox.window.closed') : t('inbox.window.left', { time: this.windowTime(ms) });
+    },
+
+    /**
+     * The window as the header's chip says it, on EVERY thread (R1-I1): its countdown while open, "closed" once past. `muted` is true when nobody
+     * has to act on the thread (the chip is information, not a call to act), so it is drawn quietly. WhatsApp threads have their own window and
+     * get no chip here. '' when the customer's last message is not known.
+     */
+    windowChip(thread, now = Date.now()) {
+        if (!thread || thread.platform === 'whatsapp') return null;
+        const ms = Attention.replyWindowLeftMs(thread, now);
+        if (ms === null) return null;
+        const needs = Attention.needsHuman(thread);
+        if (ms <= 0) {
+            return { text: needs ? `${t('inbox.window.closed')}: ${t('inbox.window.closedHint')}` : t('inbox.window.closed'), muted: !needs };
+        }
+        return { text: t('inbox.window.left', { time: this.windowTime(ms) }), muted: !needs };
     },
 
     // ─── Handled, and who is really answering ────────────────────────────────
@@ -805,12 +879,126 @@ const InboxPage = {
         return this.ID_PATTERN.test(raw) ? raw.toLowerCase() : '';
     },
 
-    /** Open the conversation the page was opened on, once, when the list that holds it has arrived. One that is not among the newest threads is left alone. */
+    /** Open the conversation the page was opened on, once, when the list that holds it has arrived. One that is not among the newest threads is fetched alone. */
     openDeepLink() {
         const id = this._deepLinkId;
         if (!id) return;
         this._deepLinkId = '';
-        if (this.findThread(id)) this.selectThread(id);
+        this.openThreadById(id);
+    },
+
+    /** The Inbox's address for the open conversation: `#/inbox`, with `filter` and `c` when they are not the defaults. */
+    inboxHash(id) {
+        const query = new URLSearchParams();
+        if (this.filter !== this.DEFAULT_FILTER) query.set('filter', this.filter);
+        if (id) query.set('c', id);
+        const text = query.toString();
+        return text ? `#/inbox?${text}` : '#/inbox';
+    },
+
+    /**
+     * Write the address of the conversation that was just opened (INBOX-L1), without a `hashchange` (history.pushState / replaceState fire none, so
+     * the page is not re-rendered or asked to open what it is already opening). On a phone the conversation is its own screen, so it is a NEW history
+     * entry and Back returns to the list; on a wide screen the list and the conversation share one, so the entry is replaced and Back leaves the Inbox.
+     */
+    writeThreadAddress(id) {
+        const next = this.inboxHash(id);
+        let current = '';
+        try { current = String(location.hash || ''); } catch { return; }
+        if (current === next) return;
+        const push = this.isPhone() && this.threadFromHash() !== id;
+        try {
+            if (push && typeof history !== 'undefined' && typeof history.pushState === 'function') {
+                history.pushState(null, '', next);
+                this._pushedFor = id;
+            } else if (typeof history !== 'undefined' && typeof history.replaceState === 'function') {
+                history.replaceState(null, '', next);
+                if (!push) this._pushedFor = '';
+            }
+        } catch { /* a sandboxed frame: the conversation still opens */ }
+    },
+
+    /**
+     * The address changed inside the Inbox (Back, Forward, a link to a conversation): open or close the conversation to match it, with no re-render.
+     * `App.onHashChange` calls this for a change to the page that is already open.
+     */
+    onHashChange() {
+        const wanted = this.filterFromHash();
+        if (wanted !== this.filter) {
+            this.filter = wanted;
+            this.moreOpen = this.MORE_VIEWS.includes(wanted);
+            this.syncFilterButtons();
+            this.renderThreads();
+        }
+        const id = this.threadFromHash();
+        if (!id) {
+            this._pushedFor = '';
+            this.closeConversation();
+            return;
+        }
+        if (id === this.selectedConversationId) {
+            const layout = document.querySelector('.inbox-layout');
+            if (layout) layout.dataset.pane = 'chat';
+            return;
+        }
+        this.openThreadById(id, { fromHash: true });
+    },
+
+    /** Open a conversation by id: from the list when it is there, else fetched on its own (a thread past the newest 100). */
+    openThreadById(id, opts = {}) {
+        if (this.findThread(id)) { this.selectThread(id, { fromHash: true, ...opts }); return; }
+        this.openLinked(id, opts);
+    },
+
+    /**
+     * `GET /conversations/:id` for a thread the list does not hold. A thread that is not this workspace's, or not there, is the same 404: the
+     * address is cleaned (`c` dropped) and one line says so. Any other failure says why, and leaves the list as it is.
+     */
+    async openLinked(id, opts = {}) {
+        const epoch = this._epoch;
+        let item = null;
+        try {
+            item = await API.getConversation(id);
+        } catch (err) {
+            if (epoch !== this._epoch) return;
+            if (err && err.status === 404) UI.toast(t('inbox.deepLinkMissing'), 'error');
+            else UI.toast(UI.failureLine(err), 'error');
+            this.dropAddressOf(id);
+            return;
+        }
+        if (epoch !== this._epoch) return;
+        if (!item || typeof item !== 'object' || item.id !== id) { this.dropAddressOf(id); return; }
+        // Back in the list meanwhile (a poll) or a different conversation asked for: leave this one alone.
+        if (!this.findThread(id)) this._linked = this.applyPending([item])[0];
+        if (this.threadFromHash() !== id && !opts.fromHash) return;
+        this.selectThread(id, { fromHash: true });
+    },
+
+    /** The address no longer names `id` (it could not be opened): `c` is dropped in place. */
+    dropAddressOf(id) {
+        if (this.threadFromHash() !== id) return;
+        try {
+            if (typeof history !== 'undefined' && typeof history.replaceState === 'function') history.replaceState(null, '', this.inboxHash(''));
+        } catch { /* the list is showing either way */ }
+    },
+
+    /** The open thread of a conversation the list does not hold, read again on a poll, so its newest message and window stay current. */
+    async refreshLinked() {
+        const linked = this._linked;
+        if (!linked) return;
+        const epoch = this._epoch;
+        try {
+            const item = await API.getConversation(linked.id);
+            if (epoch !== this._epoch || !this._linked || this._linked.id !== linked.id || !item || item.id !== linked.id) return;
+            Object.assign(this._linked, item);
+            if (this.selectedConversationId === linked.id) {
+                this.updateChatHeader(this._linked);
+                if (this._linked.last_message_at !== this.lastMessageStamp) {
+                    this.lastMessageStamp = this._linked.last_message_at;
+                    this.loadMessages(linked.id);
+                }
+            }
+        } catch { /* the next poll asks again */ }
     },
 
     matchesFilter(thread) {
@@ -877,7 +1065,7 @@ const InboxPage = {
         // `#/inbox` opens on, so it is the one view with no parameter.
         try {
             if (typeof history !== 'undefined' && history.replaceState) {
-                history.replaceState(null, '', next === this.DEFAULT_FILTER ? '#/inbox' : `#/inbox?filter=${next}`);
+                history.replaceState(null, '', this.inboxHash(this.threadFromHash()));
             }
         } catch { /* a sandboxed frame: the filter still applies */ }
         this.renderThreads();
@@ -1028,6 +1216,10 @@ const InboxPage = {
             // Not awaited, and never throws: the names of the newest threads fill in behind the list, one at a time.
             this.backfillProfiles(rows);
 
+            // A conversation opened from an address that the newest threads now hold is the list's again; one they do not hold is read on its own.
+            if (this._linked && rows.some((x) => x.id === this._linked.id)) this._linked = null;
+            else if (this._linked && this._linked.id === this.selectedConversationId) this.refreshLinked();
+
             // Only refetch the open conversation when it actually changed.
             if (this.selectedConversationId) {
                 const thread = this.findThread(this.selectedConversationId);
@@ -1079,13 +1271,15 @@ const InboxPage = {
         const own = this.threads.find((x) => x.id === id);
         if (own) return own;
         const rows = this.searchMatches ? this.searchMatches.rows : [];
-        return rows.find((x) => x.id === id) || null;
+        const found = rows.find((x) => x.id === id);
+        if (found) return found;
+        return this._linked && this._linked.id === id ? this._linked : null;
     },
 
     /** Every copy of a thread this page holds: the list's and the search's. */
     threadCopies(id) {
         const rows = this.searchMatches ? this.searchMatches.rows : [];
-        return [...this.threads, ...rows].filter((x) => x.id === id);
+        return [...this.threads, ...rows, ...(this._linked ? [this._linked] : [])].filter((x) => x.id === id);
     },
 
     visibleThreads() {
@@ -1412,10 +1606,12 @@ const InboxPage = {
     },
 
     // ─── Chat pane ───────────────────────────────────────────────────────────
-    selectThread(id) {
+    /** `opts.fromHash`: the address already says this conversation (the page was asked by it), so none is written. */
+    selectThread(id, opts = {}) {
         // Mobile: even re-selecting the open thread has to move to the chat pane.
         const layout = document.querySelector('.inbox-layout');
         if (layout) layout.dataset.pane = 'chat';
+        if (!opts.fromHash) this.writeThreadAddress(id);
 
         // The row that was just activated. At 900px and below the sidebar
         // becomes display:none the instant data-pane flips, so this element is
@@ -1426,6 +1622,7 @@ const InboxPage = {
         // The same thread again (mobile: back to the list and in): a log that was hidden can come back scrolled to its top, so one that
         // was at its newest message goes back there.
         if (this.selectedConversationId === id) { this.keepPinned(); this.focusChatPane(trigger); return; }
+        this.saveDraft();
         this.selectedConversationId = id;
         this.resetMessageState();
 
@@ -1536,12 +1733,46 @@ const InboxPage = {
         if (composer && !back && typeof composer.focus === 'function') composer.focus();
     },
 
+    /**
+     * The arrow in the conversation's header. When this page PUSHED the conversation's address, the way back is the browser's own Back (so the
+     * arrow and the phone's Back button are one thing, and the entry is not left behind to come forward to); otherwise there is no entry of ours
+     * to pop (the page was opened on the conversation, or the screen is wide) and the address is cleaned in place.
+     */
     backToThreads() {
+        const id = this.selectedConversationId;
+        const canPop = this._pushedFor !== '' && this._pushedFor === id && this.threadFromHash() === id
+            && typeof history !== 'undefined' && typeof history.back === 'function';
+        this._pushedFor = '';
+        // The list is shown at once either way; the `hashchange` Back causes finds the list already showing and changes nothing.
+        this.closeConversation();
+        if (canPop) {
+            history.back();
+            return;
+        }
+        try {
+            if (this.threadFromHash() && typeof history !== 'undefined' && typeof history.replaceState === 'function') history.replaceState(null, '', this.inboxHash(''));
+        } catch { /* the list is showing either way */ }
+    },
+
+    /** Show the list, keep the conversation (and any unsent reply) where it is, and put focus on the row that was open. */
+    closeConversation() {
+        this.saveDraft();
         const layout = document.querySelector('.inbox-layout');
         if (layout) layout.dataset.pane = 'threads';
         // Send focus somewhere real, or it lands on <body> after the pane swap.
         const active = document.querySelector('.thread-item.active') || document.getElementById('inbox-search');
         if (active && typeof active.focus === 'function') active.focus();
+    },
+
+    /** The open thread's unsent reply, kept for that conversation (an empty box keeps none). */
+    saveDraft() {
+        const id = this.chatShellThreadId;
+        if (!id) return;
+        const input = document.getElementById('chat-input-text');
+        if (!input) return;
+        const value = String(input.value || '');
+        if (value.trim()) this._drafts.set(id, value);
+        else this._drafts.delete(id);
     },
 
     /**
@@ -1584,6 +1815,7 @@ const InboxPage = {
             hint.innerHTML = esc(this.composerHintMarkup(thread));
             hint.dataset.state = hintKey;
             UI.icons(hint);
+            this.syncComposerClosed(thread);
         }
     },
 
@@ -1606,10 +1838,14 @@ const InboxPage = {
         const avatar = this.avatarMarkup(thread);
         const meta = this.metaMarkup(thread);
         const handled = this.handledSlotMarkup(thread);
+        const composerHandled = this.composerHandledMarkup(thread);
         const windowOffer = this.windowOfferMarkup(thread);
+        // Past Meta's window the box and Send are replaced by what to do instead (windowOfferMarkup), on every Instagram and Facebook thread.
+        const closed = Attention.replyClosed(thread);
         this._avatarMarkup = esc(avatar);
         this._metaMarkup = esc(meta);
         this._handledMarkup = esc(handled);
+        this._composerHandledMarkup = esc(composerHandled);
         this._windowOfferMarkup = esc(windowOffer);
 
         chatPane.innerHTML = esc(html`
@@ -1680,23 +1916,31 @@ const InboxPage = {
             </div>
 
             <div class="chat-composer">
-                <!-- Once Meta's 24 h window has closed a reply from here cannot reach the person: the answer is in the Instagram app,
-                     and this is where the owner says he has given it. Painted by paintWindowOffer. -->
+                <!-- Once Meta's window has closed a reply from here cannot reach the person: the box and Send are replaced by this (what happened,
+                     where to answer instead, and "mark handled" on a thread that needs a person). Painted by paintWindowOffer. -->
                 <div class="composer-window" id="composer-window">${windowOffer}</div>
-                <form id="chat-send-form" data-submit="inbox:sendMessage" data-id="${thread.id}">
+                <form id="chat-send-form" data-submit="inbox:sendMessage" data-id="${thread.id}"${closed ? html.raw(' hidden') : ''}>
                     <label class="sr-only" for="chat-input-text">${t('inbox.replyLabel')}</label>
-                    <textarea id="chat-input-text" dir="auto" placeholder="${t('inbox.replyPlaceholder')}"
+                    <textarea id="chat-input-text" dir="auto" placeholder="${this.placeholderText()}"
                               aria-describedby="composer-hint"></textarea>
                     ${UI.button({
                         variant: 'primary', type: 'submit', icon: 'send',
                         ariaLabel: t('inbox.sendLabel'),
                     })}
                 </form>
-                <p class="composer-hint" id="composer-hint" data-state="${`${effective}|${on ? 'on' : 'off'}`}">${this.composerHintMarkup(thread)}</p>
+                <div class="composer-foot">
+                    <p class="composer-hint" id="composer-hint" data-state="${`${effective}|${on ? 'on' : 'off'}`}"${closed && on ? html.raw(' hidden') : ''}>${this.composerHintMarkup(thread)}</p>
+                    <!-- On a phone "Mark handled" sits here, beside the composer, and not in the header (the stylesheet shows one of the two). -->
+                    <span class="composer-handled-slot" id="composer-handled-slot">${composerHandled}</span>
+                </div>
             </div>
         `);
 
         this.chatShellThreadId = thread.id;
+        // The reply typed here before the person went to another conversation (or back to the list) is still theirs.
+        const draft = this._drafts.get(thread.id);
+        const box = document.getElementById('chat-input-text');
+        if (draft && box) box.value = draft;
         this.bindLog();
         UI.icons(chatPane);
     },
@@ -1749,8 +1993,8 @@ const InboxPage = {
     },
 
     /** One chip of the detail strip. `note` is what the chip does not say on its face: a tooltip, and read out after it. */
-    metaChip(label, { icon = '', accent = false, note = '' } = {}) {
-        return html`<span class="chip${accent ? html.raw(' chip-accent') : ''}"${note ? html` title="${note}"` : ''}>${icon ? html`<i data-lucide="${icon}" aria-hidden="true"></i>` : ''}${label}${note ? html`<span class="sr-only">. ${note}</span>` : ''}</span>`;
+    metaChip(label, { icon = '', accent = false, note = '', muted = false } = {}) {
+        return html`<span class="chip${accent ? html.raw(' chip-accent') : ''}${muted ? html.raw(' chip-muted') : ''}"${note ? html` title="${note}"` : ''}>${icon ? html`<i data-lucide="${icon}" aria-hidden="true"></i>` : ''}${label}${note ? html`<span class="sr-only">. ${note}</span>` : ''}</span>`;
     },
 
     /**
@@ -1780,47 +2024,69 @@ const InboxPage = {
     metaMarkup(thread) {
         if (!thread) return '';
         const chips = [];
+        // On a phone only the first of each kind marked `lead` shows: the stage (or hot), the window, whether they follow you. The rest are
+        // behind "More about <name>" (R1-I15), because the log, not the chips, is what the screen is for.
+        const lead = new Set();
+        const add = (chip, isLead = false) => { if (isLead) lead.add(chips.length); chips.push(chip); };
+        const hasStage = this.STAGES.includes(thread.stage);
         // Where the sales flow has got to with this person, and whether they are a hot lead.
-        if (this.STAGES.includes(thread.stage)) {
-            chips.push(this.metaChip(t('inbox.stage.chip', { stage: t(`inbox.stage.${thread.stage}`) }), { icon: 'flag', accent: thread.stage === 'link' }));
+        if (hasStage) {
+            add(this.metaChip(t('inbox.stage.chip', { stage: t(`inbox.stage.${thread.stage}`) }), { icon: 'flag', accent: thread.stage === 'link' }), true);
         }
-        if (Attention.isHot(thread)) chips.push(this.metaChip(t('inbox.hot'), { icon: 'zap', accent: true }));
+        if (Attention.isHot(thread)) add(this.metaChip(t('inbox.hot'), { icon: 'zap', accent: true }), !hasStage);
         // A3: Meta Business AI holds the thread (the bot's sends are refused), and the ad the thread began from, each with where to read more.
         if (thread.noReplyReason === 'business_ai_owns_thread') {
-            chips.push(this.metaChip(t('inbox.ad.businessAi'), { icon: 'alert-circle', accent: true, note: t('inbox.ad.businessAiNote') }));
-            chips.push(UI.helpLink('ads#business-ai', t('inbox.ad.businessAiHelp')));
+            add(this.metaChip(t('inbox.ad.businessAi'), { icon: 'alert-circle', accent: true, note: t('inbox.ad.businessAiNote') }));
+            // The Business AI help lives in the Inbox article: a workspace without Ads has no Ads article to show it from.
+            add(UI.helpLink('inbox#business-ai', t('inbox.ad.businessAiHelp')));
         }
         if (thread.ad) {
-            chips.push(this.metaChip(thread.ad.name ? t('inbox.ad.from', { name: thread.ad.name }) : t('inbox.ad.fromUnnamed'), { icon: 'megaphone' }));
-            chips.push(UI.helpLink('ads#message-ads-inbox', t('inbox.ad.help')));
+            add(this.metaChip(thread.ad.name ? t('inbox.ad.from', { name: thread.ad.name }) : t('inbox.ad.fromUnnamed'), { icon: 'megaphone' }));
+            add(UI.helpLink('ads#message-ads-inbox', t('inbox.ad.help')));
         } else if (Number(thread.adTouches) > 0) {
-            chips.push(this.metaChip(t('inbox.ad.returned'), { icon: 'megaphone' }));
+            add(this.metaChip(t('inbox.ad.returned'), { icon: 'megaphone' }));
         }
         // Handed over to a person, and how long Meta's window leaves to answer (a closed window is answered from the Instagram app).
-        if (this.needsYou(thread)) chips.push(this.metaChip(t('inbox.needsYou'), { icon: 'alert-circle', accent: true }));
+        if (this.needsYou(thread)) add(this.metaChip(t('inbox.needsYou'), { icon: 'alert-circle', accent: true }));
         // Marked handled by the owner, and the customer has not written since: why the two chips above are gone.
-        if (Attention.isHandled(thread)) chips.push(this.metaChip(t('inbox.handled.state'), { icon: 'check' }));
-        const countdown = this.windowText(thread);
-        if (countdown) {
-            const closed = Attention.windowLeftMs(thread) === 0;
-            chips.push(this.metaChip(closed ? `${countdown}: ${t('inbox.window.closedHint')}` : countdown, { icon: 'clock' }));
-        }
-        chips.push(...this.linkChips(thread));
-        if (thread.is_user_follow_business === true) chips.push(this.metaChip(t('inbox.meta.followsYou'), { icon: 'user-check', accent: true }));
-        else if (thread.is_user_follow_business === false) chips.push(this.metaChip(t('inbox.meta.notFollowsYou')));
-        if (thread.is_business_follow_user === true) chips.push(this.metaChip(t('inbox.meta.youFollow'), { icon: 'users', accent: true }));
-        else if (thread.is_business_follow_user === false) chips.push(this.metaChip(t('inbox.meta.youDontFollow')));
-        if (thread.is_verified_user === true) chips.push(this.metaChip(t('inbox.meta.verified'), { accent: true }));
+        if (Attention.isHandled(thread)) add(this.metaChip(t('inbox.handled.state'), { icon: 'check' }));
+        // The window, on every Instagram or Facebook thread (R1-I1): its countdown while open, muted when nobody has to act, and "closed" once past.
+        const windowChip = this.windowChip(thread);
+        if (windowChip) add(this.metaChip(windowChip.text, { icon: 'clock', muted: windowChip.muted }), true);
+        for (const chip of this.linkChips(thread)) add(chip);
+        if (thread.is_user_follow_business === true) add(this.metaChip(t('inbox.meta.followsYou'), { icon: 'user-check', accent: true }), true);
+        else if (thread.is_user_follow_business === false) add(this.metaChip(t('inbox.meta.notFollowsYou')), true);
+        if (thread.is_business_follow_user === true) add(this.metaChip(t('inbox.meta.youFollow'), { icon: 'users', accent: true }));
+        else if (thread.is_business_follow_user === false) add(this.metaChip(t('inbox.meta.youDontFollow')));
+        if (thread.is_verified_user === true) add(this.metaChip(t('inbox.meta.verified'), { accent: true }));
         const followers = Number(thread.follower_count);
         if (thread.follower_count !== null && thread.follower_count !== undefined && Number.isFinite(followers)) {
-            chips.push(this.metaChip(t('inbox.meta.followers', { count: followers, n: UI.formatNumber(followers) })));
+            add(this.metaChip(t('inbox.meta.followers', { count: followers, n: UI.formatNumber(followers) })));
         }
-        if (thread.created_at) chips.push(this.metaChip(t('inbox.meta.since', { date: UI.formatDay(thread.created_at) })));
+        if (thread.created_at) add(this.metaChip(t('inbox.meta.since', { date: UI.formatDay(thread.created_at) })));
         const messages = Number(thread.message_count);
         if (thread.message_count !== null && thread.message_count !== undefined && Number.isFinite(messages)) {
-            chips.push(this.metaChip(t('inbox.meta.messages', { count: messages, n: UI.formatNumber(messages) })));
+            add(this.metaChip(t('inbox.meta.messages', { count: messages, n: UI.formatNumber(messages) })));
         }
-        return chips.length ? html`${chips}` : '';
+        if (!chips.length) return '';
+        if (!this.isPhone()) return html`${chips}`;
+        // One screen, one conversation: three chips, and the rest one tap away.
+        const shown = chips.filter((_, i) => lead.has(i));
+        const rest = chips.filter((_, i) => !lead.has(i));
+        if (!rest.length) return html`${shown}`;
+        const open = this._metaMoreFor === thread.id;
+        return html`${shown}<button type="button" class="chip chip-more" id="chat-meta-more" data-action="inbox:toggleMeta" data-id="${thread.id}" aria-expanded="${open ? 'true' : 'false'}" aria-controls="chat-meta">${open ? t('inbox.meta.less') : t('inbox.meta.more', { name: this.threadTitle(thread) })}</button>${open ? rest : ''}`;
+    },
+
+    /** "More about <name>" / "Show less": the phone's chip strip, opened and closed for the open conversation. */
+    toggleMeta(id) {
+        const thread = this.findThread(id);
+        if (!thread) return;
+        this._metaMoreFor = this._metaMoreFor === id ? '' : id;
+        this._metaMarkup = null;
+        const focus = UI.captureFocus(document.getElementById('chat-meta'));
+        this.paintMeta(thread);
+        UI.restoreFocus(focus, 'chat-meta-more');
     },
 
     /** Poll-safe, like everything in the header: written only when the markup differs from what is on screen. */
@@ -1915,40 +2181,83 @@ const InboxPage = {
      * The header's "Mark handled" for a thread that needs a person, "Reopen" for one the owner has marked, nothing for the rest (and for
      * a viewer). One button with one id, so focus can be put back on it when it changes into the other.
      */
-    handledSlotMarkup(thread) {
+    handledSlotMarkup(thread, id = 'chat-mark-handled') {
         if (!thread || !this.canMark()) return '';
         if (Attention.isHandled(thread)) {
-            return UI.button({ variant: 'ghost', size: 'sm', icon: 'rotate-ccw', label: t('inbox.handled.reopen'), action: 'inbox:unmarkHandled', id: 'chat-mark-handled', data: { id: thread.id } });
+            return UI.button({ variant: 'ghost', size: 'sm', icon: 'rotate-ccw', label: t('inbox.handled.reopen'), action: 'inbox:unmarkHandled', id, data: { id: thread.id } });
         }
         if (this.isTodo(thread)) {
-            return UI.button({ variant: 'secondary', size: 'sm', icon: 'check', label: t('inbox.handled.mark'), action: 'inbox:markHandled', id: 'chat-mark-handled', data: { id: thread.id } });
+            return UI.button({ variant: 'secondary', size: 'sm', icon: 'check', label: t('inbox.handled.mark'), action: 'inbox:markHandled', id, data: { id: thread.id } });
         }
         return '';
     },
 
     /**
-     * What the composer offers once the 24 h window has closed on a thread that needs a person: the way to say "I answered it in the
-     * Instagram app". Only then: with the window open the owner can simply reply here, and a thread nobody has to answer needs nothing.
+     * The same button beside the composer, which is where it sits on a phone (the header keeps one row there). A thread whose window has closed
+     * has no composer, and its own "mark handled" is in the closed block, so this is empty for it (never two buttons for one act), except "Reopen"
+     * on one already marked handled, which has nowhere else to be on a phone.
+     */
+    composerHandledMarkup(thread) {
+        if (!thread || (Attention.replyClosed(thread) && !Attention.isHandled(thread))) return '';
+        return this.handledSlotMarkup(thread, 'composer-handled-btn');
+    },
+
+    /**
+     * What replaces the reply box once Meta's window has closed, on EVERY Instagram or Facebook thread (R1-I1), not only the ones that need a person:
+     * what happened and how long ago, where to answer instead, a link into the Instagram app when the handle is known, and "mark handled" on a thread
+     * that is still to do. The window is the server's (`reply_window_ends_at`): a send past it is refused with 409 `WINDOW_CLOSED`, so a box offered
+     * here could only fail. '' while the window is open, for a WhatsApp thread (its own rule), and when the customer's last message is not known.
      */
     windowOfferMarkup(thread) {
-        if (!thread || !this.canMark() || !Attention.needsHuman(thread) || Attention.windowLeftMs(thread) !== 0) return '';
+        if (!thread || !Attention.replyClosed(thread)) return '';
         // The answer is in the app the person wrote from: Instagram, or the Page inbox for a Messenger thread.
         const facebook = thread.platform === 'facebook';
-        const text = facebook ? t('inbox.window.offerFacebook') : t('inbox.window.offer');
+        const ago = UI.relativeAge(new Date(Attention.replyWindowEndsMs(thread))).text;
+        const text = t(facebook ? 'inbox.window.closedBodyFacebook' : 'inbox.window.closedBody', { ago });
         const label = facebook ? t('inbox.window.offerActionFacebook') : t('inbox.window.offerAction');
-        return html`<p class="composer-window-text">${text}</p>${UI.button({ variant: 'secondary', size: 'sm', icon: 'check', label, action: 'inbox:markHandled', id: 'composer-mark-handled', data: { id: thread.id } })}`;
+        const link = facebook ? '' : this.openInstagramMarkup(thread);
+        const mark = this.canMark() && this.isTodo(thread) && !Attention.isHandled(thread)
+            ? UI.button({ variant: 'secondary', size: 'sm', icon: 'check', label, action: 'inbox:markHandled', id: 'composer-mark-handled', data: { id: thread.id } })
+            : '';
+        return html`<p class="composer-window-text" data-window-closed>${text}</p><span class="composer-window-actions">${link}${mark}</span>`;
+    },
+
+    /**
+     * "Open in Instagram": `https://ig.me/m/<handle>`, for an Instagram thread whose @handle is known (never built from the numeric id, which is not
+     * a username, and never for Facebook). The handle is checked to be one before it goes into a link.
+     */
+    openInstagramMarkup(thread) {
+        if (!thread || thread.platform === 'facebook' || thread.platform === 'whatsapp') return '';
+        const username = typeof thread.username === 'string' ? thread.username.trim().replace(/^@/, '') : '';
+        if (!/^[A-Za-z0-9._]{1,30}$/.test(username)) return '';
+        return html`<a class="btn btn-secondary btn-sm" id="composer-open-instagram" href="https://ig.me/m/${username}" target="_blank" rel="noopener noreferrer"><i data-lucide="external-link" aria-hidden="true"></i><span>${t('inbox.window.openInstagram')}</span><span class="sr-only"> ${t('help.link.newTab')}</span></a>`;
     },
 
     paintHandled(thread) {
+        if (!thread || this.chatShellThreadId !== thread.id) return;
         const slot = document.getElementById('chat-handled-slot');
-        if (!slot || !thread || this.chatShellThreadId !== thread.id) return;
-        const markup = esc(this.handledSlotMarkup(thread));
-        if (markup === this._handledMarkup) return;
-        const focus = UI.captureFocus(slot);
-        this._handledMarkup = markup;
-        slot.innerHTML = markup;
-        UI.icons(slot);
-        UI.restoreFocus(focus);
+        if (slot) {
+            const markup = esc(this.handledSlotMarkup(thread));
+            if (markup !== this._handledMarkup) {
+                const focus = UI.captureFocus(slot);
+                this._handledMarkup = markup;
+                slot.innerHTML = markup;
+                UI.icons(slot);
+                UI.restoreFocus(focus);
+            }
+        }
+        // The copy beside the composer (a phone's), kept in step, and emptied while the composer is replaced by the closed notice.
+        const beside = document.getElementById('composer-handled-slot');
+        if (beside) {
+            const markup = esc(this.composerHandledMarkup(thread));
+            if (markup !== this._composerHandledMarkup) {
+                const focus = UI.captureFocus(beside);
+                this._composerHandledMarkup = markup;
+                beside.innerHTML = markup;
+                UI.icons(beside);
+                UI.restoreFocus(focus);
+            }
+        }
     },
 
     paintWindowOffer(thread) {
@@ -1961,6 +2270,16 @@ const InboxPage = {
         host.innerHTML = markup;
         UI.icons(host);
         UI.restoreFocus(focus, 'chat-mark-handled');
+        this.syncComposerClosed(thread);
+    },
+
+    /** The reply box and the pause hint are shown while a reply can still go, and hidden (not removed: a typed draft stays in the box) once it cannot. */
+    syncComposerClosed(thread) {
+        const closed = Attention.replyClosed(thread);
+        const form = document.getElementById('chat-send-form');
+        if (form) form.hidden = closed;
+        const hint = document.getElementById('composer-hint');
+        if (hint) hint.hidden = closed && thread.is_bot_active !== false;
     },
 
     // ─── The strip above the list ────────────────────────────────────────────
@@ -3351,7 +3670,17 @@ const InboxPage = {
             console.error('Send Message Error:', err);
             dropPlaceholder();
             if (input && !input.value) input.value = text;
-            UI.toast(err.message || t('inbox.sendFailed'), 'error');
+            // The server says the window is closed (the page thought it open, a customer message it had not seen, a clock a little apart): the thread
+            // is closed here too from now on, so the box is replaced by what to do instead rather than offered again.
+            if (err && err.code === 'WINDOW_CLOSED') {
+                const given = err.params && typeof err.params.closedAt === 'string' ? err.params.closedAt : '';
+                const at = Number.isFinite(Date.parse(given)) ? given : new Date().toISOString();
+                this.threadCopies(id).forEach((copy) => { copy.reply_window_ends_at = at; });
+                const closedThread = this.findThread(id);
+                if (closedThread) this.updateChatHeader(closedThread);
+            }
+            // A failure a person can read: the sentence and the next step, never Meta's English. Anything the catalogue does not know keeps the plain "could not send".
+            UI.toast(UI.failureParts(err).translated ? UI.failureLine(err) : t('inbox.sendFailed'), 'error');
         } finally {
             restore();
             // `finally` runs after loadMessages() AND loadThreads(), which on a
@@ -3369,6 +3698,7 @@ const InboxPage = {
 UI.registerActions('inbox', {
     selectThread: (el) => InboxPage.selectThread(el.dataset.id),
     backToThreads: () => InboxPage.backToThreads(),
+    toggleMeta: (el) => InboxPage.toggleMeta(el && el.dataset ? el.dataset.id : ''),
     toggleBot: (el) => InboxPage.toggleBot(el.dataset.id, el.checked),
     sendMessage: (el, e) => InboxPage.sendMessage(el, e),
     handleSearch: (el) => InboxPage.handleSearch(el.value),

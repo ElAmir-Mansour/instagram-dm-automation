@@ -66,6 +66,8 @@ import {
 import { tenantTimezone } from '../services/profile/timezone.js';
 import { adIdOf, annotateMessages, conversationView, loadLinkClicks, loadMessageExtras, profileView } from '../services/inboxDetail.js';
 import { adNamesFor } from '../services/ads/attribution.js';
+import { readExtendedWindow } from '../services/ads/switches.js';
+import { lastInboundOf, replyWindowClosed } from '../services/replyWindow.js';
 import { loadAssistantState } from '../services/inboxAssistant.js';
 import { loadDmFunnel, parseDmFunnelWindow } from '../services/dmFunnel.js';
 import { refreshSenderProfile } from '../services/senderProfile.js';
@@ -105,7 +107,7 @@ import {
     normaliseIsoDay, normaliseWhatsappNumber, setSetting,
 } from '../services/appSettings.js';
 import { whatsappUrl } from '../services/publicPages.js';
-import { isMetaUnavailable, metaHttp } from '../services/http.js';
+import { isMetaUnavailable, metaErrorCode, metaErrorSubcode, metaHttp } from '../services/http.js';
 import { postModeFor } from './tiktok.js';
 import { getConnection as getTikTokConnection, refreshAllConnections } from '../services/tiktokConnections.js';
 import { formatPublishedIds, publishedPlatforms } from '../services/publishedIds.js';
@@ -3948,17 +3950,20 @@ router.get('/conversations', async (req, res) => {
         // too. Its own optional lookup, like the clicks: null when it cannot be read, and then every item says only what its own switch says.
         // And the stored copy's names for the ads that started these threads (A3: the "from ad" chip). Its own optional lookup: no name is the
         // title Meta sent with the click, never a failed list.
-        const [clicks, assistant, adNames] = await Promise.all([
+        // And the ads switch that lengthens a click-to-message thread's reply window (`reply_window_ends_at`, `replyWindow.ts`): read once, and
+        // never a failure (an unreadable setting is "off").
+        const [clicks, assistant, adNames, extendedWindow] = await Promise.all([
             loadLinkClicks(tenantId, result.rows.map((row) => String(row.id))),
             loadAssistantState(tenantId),
             adNamesFor(tenantId, result.rows.map((row) => adIdOf(row)).filter((id): id is string => Boolean(id))),
+            readExtendedWindow(tenantId),
         ]);
 
         res.json({
             // Always carries `platform`, null included, so the inbox reads one shape before and
             // after v26 is applied. `conversationView` does the same for v40's profile columns and v39's sales state,
             // and adds `handled_at`, `window_ends_at` and `effective_ai` (v45, UX US1).
-            data: result.rows.map((row) => conversationView(row, conversationPlatformOf(row.platform), clicks.get(String(row.id)), assistant, adNames)),
+            data: result.rows.map((row) => conversationView(row, conversationPlatformOf(row.platform), clicks.get(String(row.id)), assistant, adNames, extendedWindow)),
             // `{ configured, is_active, sales_mode, sales_test_senders }`, or null: the same state the items' `effective_ai` came from, so the page
             // can repaint a thread the moment its own switch is flipped, and say once, at the top, why nobody is being answered.
             assistant,
@@ -3972,6 +3977,31 @@ router.get('/conversations', async (req, res) => {
     } catch (err) {
         log('error', 'api.conversations_failed', describeError(err));
         res.status(500).json({ error: 'Failed to fetch conversations.' });
+    }
+});
+
+/**
+ * One conversation, as the list item it is (INBOX-L1): what a reloaded or shared `#/inbox?c=<id>` opens when the thread is not among the newest
+ * 100 the list holds. Scoped to the session's tenant exactly as `GET /conversations` is (the same query, `c.creator_id = $1`): another
+ * workspace's id, an id that is not a UUID and one that does not exist are all the same 404, so the route cannot tell whose it is.
+ * `conversationSummary` is also what Mark handled answers with, so the item is the same shape everywhere.
+ */
+router.get('/conversations/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        if (!isUuid(id)) {
+            res.status(404).json({ error: 'Conversation not found.' });
+            return;
+        }
+        const item = await conversationSummary(getTenantId(req), id);
+        if (!item) {
+            res.status(404).json({ error: 'Conversation not found.' });
+            return;
+        }
+        res.json(item);
+    } catch (err) {
+        log('error', 'api.conversation_failed', describeError(err));
+        res.status(500).json({ error: 'Failed to fetch the conversation.' });
     }
 });
 
@@ -4178,6 +4208,29 @@ async function replyOnWhatsApp(res: Response, input: { conversationId: string; t
     res.json({ success: true, message: 'Message sent manually. Bot is paused for this thread.' });
 }
 
+/** `conversations.entry_source` as an object (JSONB arrives parsed; text is parsed here), or null. */
+function parseEntrySource(value: unknown): { kind?: unknown; platform?: unknown; at?: unknown } | null {
+    let v = value;
+    if (typeof v === 'string') {
+        try { v = JSON.parse(v); } catch { return null; }
+    }
+    return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
+}
+
+/** Meta refused a send for the messaging window: code 10 with subcode 2018278 (Messenger) or 2534022 (Instagram). Pure. */
+export function isMessagingWindowRefusal(err: unknown): boolean {
+    return metaErrorCode(err) === 10 && [2018278, 2534022].includes(metaErrorSubcode(err) ?? 0);
+}
+
+/** The 409 for a reply past Meta's window on an Instagram or Facebook thread. WhatsApp's own is `WHATSAPP_WINDOW_CLOSED`. `closedAt` is null when Meta said it and the time is not known. */
+function sendWindowClosed(res: Response, closedAt: string | null): void {
+    sendError(
+        res, 409, 'WINDOW_CLOSED', { closedAt },
+        'Meta accepts replies only within 24 hours of the customer\'s last message.',
+        { closedAt }
+    );
+}
+
 router.post('/conversations/:id/messages', canOperate, async (req, res) => {
     try {
         const { id } = req.params;
@@ -4226,6 +4279,26 @@ router.post('/conversations/:id/messages', canOperate, async (req, res) => {
             return;
         }
 
+        // A reply the customer's window no longer accepts is refused HERE, before Meta is asked (R1-I1): Meta's refusal came back as a 500 with its
+        // English, and the page toasted it raw. The rule is `replyWindow.ts`, the same one the list sends as `reply_window_ends_at`. A manual send
+        // is `messaging_type: RESPONSE` with no message tag, so it is the standard 24 hours, or an ad conversation's longer window when the
+        // owner turned `ads.extended_window` on. A thread whose customer has never written has no window to be past: it is not refused.
+        const lastInbound = await pool.query(
+            `SELECT MAX(created_at) AS last_inbound_message_at FROM messages WHERE conversation_id = $1 AND direction = 'inbound'`,
+            [id]
+        );
+        const closed = replyWindowClosed({
+            lastInboundAt: lastInboundOf({ last_inbound_message_at: lastInbound.rows[0]?.last_inbound_message_at, last_inbound_at: conv.last_inbound_at }),
+            entrySource: parseEntrySource(conv.entry_source),
+            extendedWindow: await readExtendedWindow(tenantId),
+        });
+        if (closed.closed) {
+            const closedAt = closed.closedAt.toISOString();
+            log('info', 'inbox.manual_reply_refused', { conversation_id: conv.id, reason: 'window_closed' });
+            sendWindowClosed(res, closedAt);
+            return;
+        }
+
         // Send message to Instagram
         // Length, not content: this line used to put the operator's message body — and by
         // implication the private conversation it belongs to — into the log stream.
@@ -4254,6 +4327,13 @@ router.post('/conversations/:id/messages', canOperate, async (req, res) => {
 
         res.json({ success: true, message: 'Message sent manually. Bot is paused for this thread.' });
     } catch (err: any) {
+        // Meta can still refuse for the window when ours said open (a customer message we never stored, a clock a little apart): the same answer,
+        // not a 500 carrying Meta's English. Code 10 with subcode 2018278 (Messenger) or 2534022 (Instagram); 551 is not it ("not available").
+        if (isMessagingWindowRefusal(err)) {
+            log('warn', 'api.manual_send_window_refused', describeError(err));
+            sendWindowClosed(res, null);
+            return;
+        }
         log('error', 'api.manual_send_failed', describeError(err));
         res.status(500).json({ error: err.message || 'Failed to send message.' });
     }
@@ -4325,8 +4405,10 @@ async function conversationSummary(tenantId: string, id: string) {
     const row = found.rows[0];
     if (!row) return null;
     const adId = adIdOf(row);
-    const [clicks, assistant, adNames] = await Promise.all([loadLinkClicks(tenantId, [id]), loadAssistantState(tenantId), adNamesFor(tenantId, adId ? [adId] : [])]);
-    return conversationView(row, conversationPlatformOf(row.platform), clicks.get(id), assistant, adNames);
+    const [clicks, assistant, adNames, extendedWindow] = await Promise.all([
+        loadLinkClicks(tenantId, [id]), loadAssistantState(tenantId), adNamesFor(tenantId, adId ? [adId] : []), readExtendedWindow(tenantId),
+    ]);
+    return conversationView(row, conversationPlatformOf(row.platform), clicks.get(id), assistant, adNames, extendedWindow);
 }
 
 /**

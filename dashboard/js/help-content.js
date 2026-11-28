@@ -1334,10 +1334,12 @@ const HelpContent = {
                     title: { ar: 'مهلة الردّ (٢٤ ساعة)', en: 'The reply window (24 hours)' },
                     body: {
                         ar: [
-                            'تسمح ميتا بالردّ من هنا خلال 24 ساعة من آخر رسالة للعميل. بعدها تظهر «انتهت مهلة الردّ»، ويلزم أن تردّ من تطبيق إنستجرام أو من صندوق صفحتك على فيسبوك، ثم تضغط **تمّ التعامل**.',
+                            'تسمح ميتا بالردّ من هنا خلال 24 ساعة من آخر رسالة للعميل، وتظهر المهلة المتبقية في كل محادثة، خافتةً حين لا يلزمك أن تتصرف. بعدها يحلّ مكان مربع الكتابة وزرّ الإرسال نصٌّ يقول إن المهلة أُغلقت وكم مضى عليها، فيلزم أن تردّ من تطبيق إنستجرام أو من صندوق صفحتك على فيسبوك. ويوجد في المحادثات على إنستجرام زرّ **افتح في إنستجرام** حين يُعرف اسم الحساب، وزرّ **تمّ التعامل** في المحادثات التي ما زالت في **المطلوب**.',
+                            'ولا يرسل التطبيق ردًّا بعد إغلاق المهلة أصلًا: إن حاولتَ من نافذة قديمة قال لك إن ميتا لا تقبل الردّ إلا خلال 24 ساعة من آخر رسالة للعميل، ولم يُرسل شيء. وفي محادثات الإعلانات قد تمتد المهلة إلى 7 أيام من النقرة إن شغّلتَ «النافذة الأطول» في الإعلانات.',
                         ],
                         en: [
-                            'Meta lets you reply from here for 24 hours after the customer’s last message. After that the row says “Reply window closed”: reply from the Instagram app or your Page inbox on Facebook, then press **Mark handled**.',
+                            'Meta lets you reply from here for 24 hours after the customer’s last message. Every conversation shows the time left, quietly when nothing is needed from you. After that, a note replaces the reply box and Send: it says the window closed and how long ago, so reply from the Instagram app or your Page inbox on Facebook. Instagram conversations with a known handle also get **Open in Instagram**, and conversations still in **To do** get **Mark handled**.',
+                            'The app never sends a reply after the window has closed: if you try from an old screen it says Meta accepts replies only within 24 hours of the customer’s last message, and nothing is sent. In ad conversations the window can last up to 7 days from the click if you turned on “Use the longer window” in Ads.',
                         ],
                     },
                 },
@@ -1352,6 +1354,34 @@ const HelpContent = {
                         en: [
                             'The check button beside a row takes the conversation out of **To do** at once, and you can undo it for a few seconds. If the customer writes again it comes back to your list by itself.',
                             'A manual reply from here pauses the AI in that conversation. Press **Hand back to AI** when you want the assistant to take it again.',
+                        ],
+                    },
+                },
+                {
+                    id: 'business-ai',
+                    title: { ar: 'ذكاء ميتا للأعمال يتولى المحادثة', en: 'Meta Business AI holds the conversation' },
+                    body: {
+                        ar: [
+                            'لدى ميتا مساعد خاص بها اسمه «ذكاء الأعمال» (Business AI) يستطيع أن يجيب في رسائل إنستجرام. وإذا كان يتولى محادثة، ترفض ميتا كل رسالة يرسلها المساعد فيها (الخطأ 100 / 2534037)، فيبدو المساعد صامتًا، وغالبًا في محادثات الإعلانات تحديدًا.',
+                            'حين يحدث هذا، لا يعيد التطبيق المحاولة (لن تنجح)، ويضع على المحادثة في **الرسائل** شارة **ذكاء ميتا للأعمال يتولى الرد**، ويرسل إليك تنبيهًا واحدًا. وتزول الشارة وحدها عند أول رسالة يقبلها ميتا من المساعد.',
+                            { h: 'كيف تستعيد التحكم' },
+                            { ol: [
+                                'افتح Meta Business Suite للحساب نفسه.',
+                                'ادخل إلى إعدادات «ذكاء الأعمال» (Business AI) في صندوق الوارد.',
+                                'فعّل «تولَّ المحادثات من ذكاء الأعمال» (Take control of conversations with your Business AI)، أو أطفئ ذكاء الأعمال كليًّا إن كنت تريد أن يجيب بوت أوتوريبلاي وحده.',
+                                'أرسل رسالة تجربة إلى الحساب، وتأكّد أن المساعد أجاب وأن الشارة زالت.',
+                            ] },
+                        ],
+                        en: [
+                            'Meta has its own assistant, “Business AI”, which can answer Instagram messages. When it holds a conversation, Meta refuses every message the assistant sends in it (error 100 / 2534037), so the assistant looks silent, very often in ad conversations.',
+                            'When this happens the app does not retry (it would not work), marks the conversation in the **Inbox** with **Meta Business AI is answering**, and sends you one alert. The mark clears by itself at the first message Meta accepts from the assistant.',
+                            { h: 'How to take control back' },
+                            { ol: [
+                                'Open Meta Business Suite for the same account.',
+                                'Go to the “Business AI” settings in the inbox.',
+                                'Turn on “Take control of conversations with your Business AI”, or turn Business AI off altogether if you want the AutoReply assistant to be the only one answering.',
+                                'Send a test message to the account and check that the assistant answers and the mark is gone.',
+                            ] },
                         ],
                     },
                 },
@@ -2985,7 +3015,7 @@ const HelpContent = {
                                 '**قرب انتهاء وصول الإعلانات:** ينتهي الرمز خلال 14 يوماً. يخص الرموز التي لها تاريخ انتهاء، مثل رمز الاتصال عبر فيسبوك.',
                                 '**الإنفاق غير مُراقَب:** لم يستطع الحارس فحص سقفك الشهري ساعتين متتاليتين، فتواصل الحملات النشطة الإنفاق دون أن يوقفها السقف. مطلوب: لا يمكن إيقافه.',
                                 '**تغيّر إصدار واجهة ميتا الذي تجيب عليه:** ردّت ميتا بإصدار غير الإصدار الذي نثبّته، فقد تختلف بعض السلوكيات.',
-                                '**تولّى ذكاء ميتا للأعمال محادثة (لا يستطيع المساعد الرد):** ذكاء ميتا نفسها يتولى محادثة على إنستجرام ويرفض رسائل المساعد فيها. التفاصيل في [[ads#business-ai]].',
+                                '**تولّى ذكاء ميتا للأعمال محادثة (لا يستطيع المساعد الرد):** ذكاء ميتا نفسها يتولى محادثة على إنستجرام ويرفض رسائل المساعد فيها. التفاصيل في [[inbox#business-ai]].',
                                 '**رفضت ميتا ردًّا خارج النافذة (أُطفئت النافذة الأطول):** رُفض رد في محادثة بدأت من إعلان لأنه خارج نافذة المراسلة، فأطفأ التطبيق النافذة الأطول لتلك المنصة من تلقاء نفسه. التفاصيل في [[ads#reply-window]].',
                                 '**اقترح Claude تغييرات على إعلاناتك الجارية (المراجعة اليومية):** أعدّت المراجعة اليومية مقترحات. لا يتغير شيء ولا يُنفَق شيء قبل أن توافق، وتنتهي صلاحيتها بعد 7 أيام. التفاصيل في [[ads#ai-proposals]].',
                                 '**نفّذت قاعدة إجراءً: إيقافًا أو خفضًا أو مقترحًا أو تنبيهًا:** طابقت إحدى قواعدك إعلاناً أو مجموعة إعلانية أو حملة، ونفّذت ما ضبطتها عليه. التفاصيل في [[ads#rules]].',
@@ -3012,7 +3042,7 @@ const HelpContent = {
                                 '**The ads access is about to expire:** the token ends within 14 days. This applies to tokens with an end date, such as the Facebook Connect one.',
                                 '**Spending is not being watched:** the guard could not check your monthly cap for two hours in a row, so active campaigns keep spending with nothing to stop them at the cap. Required: it cannot be switched off.',
                                 '**Meta changed the API version it answers on:** Meta answered with a version other than the one we pin, so some behaviour may differ.',
-                                '**Meta Business AI took over a conversation (the assistant cannot reply):** Meta’s own assistant holds an Instagram conversation and refuses the AutoReply assistant’s messages in it. See [[ads#business-ai]].',
+                                '**Meta Business AI took over a conversation (the assistant cannot reply):** Meta’s own assistant holds an Instagram conversation and refuses the AutoReply assistant’s messages in it. See [[inbox#business-ai]].',
                                 '**Meta refused a reply outside the window (the longer window was switched off):** a reply in a conversation that began from an ad was refused for being outside the messaging window, so the app switched the longer window off for that platform by itself. See [[ads#reply-window]].',
                                 '**Claude proposed changes to your running ads (the daily review):** the daily review made proposals. Nothing changes or spends until you approve, and they expire after 7 days. See [[ads#ai-proposals]].',
                                 '**A rule paused, lowered, proposed or told you something:** one of your rules matched an ad, an ad set or a campaign and did what you set it to do. See [[ads#rules]].',
@@ -3386,34 +3416,6 @@ const HelpContent = {
                                 'If it goes through, turn on “Use the longer window on Instagram” (or “on Messenger”) for that platform. If it is refused, leave it off.',
                             ] },
                             { warn: 'If Meta refuses a reply in an ad conversation for being outside the window (error 10/2018278 or 551), the app switches that platform off by itself and you get the “Meta refused a reply outside the window” alert. Do not turn it on again before the day-2 test passes.' },
-                        ],
-                    },
-                },
-                {
-                    id: 'business-ai',
-                    title: { ar: 'ذكاء ميتا للأعمال يتولى المحادثة', en: 'Meta Business AI holds the conversation' },
-                    body: {
-                        ar: [
-                            'لدى ميتا مساعد خاص بها اسمه «ذكاء الأعمال» (Business AI) يستطيع أن يجيب في رسائل إنستجرام. وإذا كان يتولى محادثة، ترفض ميتا كل رسالة يرسلها المساعد فيها (الخطأ 100 / 2534037)، فيبدو المساعد صامتًا، وغالبًا في محادثات الإعلانات تحديدًا.',
-                            'حين يحدث هذا، لا يعيد التطبيق المحاولة (لن تنجح)، ويضع على المحادثة في **الرسائل** شارة **ذكاء ميتا للأعمال يتولى الرد**، ويرسل إليك تنبيهًا واحدًا. وتزول الشارة وحدها عند أول رسالة يقبلها ميتا من المساعد.',
-                            { h: 'كيف تستعيد التحكم' },
-                            { ol: [
-                                'افتح Meta Business Suite للحساب نفسه.',
-                                'ادخل إلى إعدادات «ذكاء الأعمال» (Business AI) في صندوق الوارد.',
-                                'فعّل «تولَّ المحادثات من ذكاء الأعمال» (Take control of conversations with your Business AI)، أو أطفئ ذكاء الأعمال كليًّا إن كنت تريد أن يجيب بوت أوتوريبلاي وحده.',
-                                'أرسل رسالة تجربة إلى الحساب، وتأكّد أن المساعد أجاب وأن الشارة زالت.',
-                            ] },
-                        ],
-                        en: [
-                            'Meta has its own assistant, “Business AI”, which can answer Instagram messages. When it holds a conversation, Meta refuses every message the assistant sends in it (error 100 / 2534037), so the assistant looks silent, very often in ad conversations.',
-                            'When this happens the app does not retry (it would not work), marks the conversation in the **Inbox** with **Meta Business AI is answering**, and sends you one alert. The mark clears by itself at the first message Meta accepts from the assistant.',
-                            { h: 'How to take control back' },
-                            { ol: [
-                                'Open Meta Business Suite for the same account.',
-                                'Go to the “Business AI” settings in the inbox.',
-                                'Turn on “Take control of conversations with your Business AI”, or turn Business AI off altogether if you want the AutoReply assistant to be the only one answering.',
-                                'Send a test message to the account and check that the assistant answers and the mark is gone.',
-                            ] },
                         ],
                     },
                 },
