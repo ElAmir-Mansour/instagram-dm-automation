@@ -81,8 +81,10 @@ describe('the registry', () => {
         assert.deepEqual(logs, []);
     });
 
-    it('does not carry WINDOW_CLOSED: no route refuses a reply for a closed window today, and a code nothing sends is not a code', () => {
-        assert.equal(isErrorCode('WINDOW_CLOSED'), false);
+    it('carries WINDOW_CLOSED: the manual send on an Instagram or Facebook thread refuses a closed window with it (R1-I1), and says when it closed', () => {
+        assert.equal(isErrorCode('WINDOW_CLOSED'), true);
+        assert.deepEqual([...ERROR_CODES.WINDOW_CLOSED.status], [409]);
+        assert.deepEqual([...ERROR_CODES.WINDOW_CLOSED.params], ['closedAt']);
     });
 
     it('isErrorCode is true for registered names only, and never for an inherited property', () => {

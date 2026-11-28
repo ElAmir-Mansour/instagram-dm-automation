@@ -5250,6 +5250,30 @@ details.cover-step[open] > summary { margin-block-end: var(--space-2); }
 .composer-window { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); margin-block-end: var(--space-2); }
 .composer-window:empty { display: none; }
 .composer-window-text { flex: 1 1 24ch; min-inline-size: 0; margin: 0; font-size: var(--fs-100); color: var(--text-default); }
+/* What replaces the box and Send once the window has closed (R1-I1): the sentence, then what to do instead. */
+.composer-window-actions { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.composer-window-actions:empty { display: none; }
+/* The window chip on a thread nobody has to act on is information, not a call to act: quiet. */
+.chip-muted { background: transparent; color: var(--text-muted); }
+/* "More about <name>" on a phone: a chip that is a button, a full tap target. */
+button.chip-more { min-block-size: var(--tap-target); cursor: pointer; color: var(--accent-text); }
+button.chip-more:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* The pause hint, and (on a phone only) "Mark handled" beside the composer. */
+.composer-foot { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); }
+.composer-foot > .composer-hint { flex: 1 1 24ch; min-inline-size: 0; }
+.composer-handled-slot { display: none; }
+
+/* One screen, one conversation (R1-I15): 860px and below with a conversation open. The page title and subtitle go (the header names the person),
+   the header is one row, "Mark handled" moves beside the composer, and the log gets the room. On a 375x812 phone the log is over 400px. */
+@media (max-width: 860px) {
+    body:has(.inbox-layout[data-pane='chat']) .page-header .header-start > div { display: none; }
+    body:has(.inbox-layout[data-pane='chat']) .page-header { row-gap: 0; padding-block-end: var(--space-2); }
+    .chat-header { padding: var(--space-2) var(--space-3); gap: var(--space-2); }
+    .chat-header .ai-state, .chat-header .chat-handled-slot { display: none; }
+    .chat-meta { padding: var(--space-1) var(--space-3); }
+    .chat-composer { padding: var(--space-2) var(--space-3); }
+    .composer-handled-slot:not(:empty) { display: inline-flex; align-items: center; }
+}
 
 /* G6: a range switch dims the numbers it is replacing instead of blanking them. */
 /* Only the page's own regions: a busy BUTTON inside them (Sync) says so with its spinner. */
@@ -5681,11 +5705,8 @@ details.cover-step[open] > summary { margin-block-end: var(--space-2); }
 .dm-funnel-arm-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: var(--space-1) var(--space-3); }
 .dm-funnel-arm-name { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-2); min-inline-size: 0; font-size: var(--fs-200); color: var(--text-strong); overflow-wrap: anywhere; }
 
-/* Phones: back, picture and name on one row, the AI switch on the next. With all four in one row the name had 73px at 375. */
-@media (max-width: 30rem) {
-    .chat-header { flex-wrap: wrap; }
-    .chat-header-actions { flex-basis: 100%; justify-content: flex-end; }
-}
+/* Phones: back, picture, name and the assistant switch share ONE row (R1-I15). They did not fit while the state words and "Mark handled" were in it;
+   those moved (below, in the 860px block) and the name has the rest. */
 
 /* A1: the window control above the tiles, and the window each panel names. */
 .analytics-toolbar { display: flex; justify-content: flex-end; margin-block-end: var(--space-4); }

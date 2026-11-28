@@ -263,7 +263,7 @@ describe('Inbox sales view: Hot', () => {
             assert.ok(String(I.threadRow(I.threads[2])).includes(s.t('inbox.ad.fromUnnamed')));
             assert.ok(!String(I.threadRow(I.threads[1])).includes('data-from-ad'));
             assert.ok(String(I.threadRow(I.threads[3])).includes(s.t('inbox.ad.businessAi')));
-            assert.ok(String(I.metaMarkup(I.threads[3])).includes('#/help/ads#business-ai'));
+            assert.ok(String(I.metaMarkup(I.threads[3])).includes('#/help/inbox#business-ai'), 'the Business AI help is in the Inbox article, which a workspace without Ads still has');
             assert.ok(String(I.emptyMarkup('ads')).includes(s.t('inbox.noAds')));
             for (const key of ['inbox.filter.ads', 'inbox.noAds', 'inbox.ad.from', 'inbox.ad.businessAi']) assert.notEqual(s.t(key), key);
         }

@@ -29,6 +29,7 @@ import type { ConversationPlatform } from '../db/rows.js';
 import { describeError, log } from '../utils/log.js';
 import { STAGES, type Stage } from './dmSales/types.js';
 import { effectiveAiOf, windowEndsAtOf, type AssistantState } from './inboxAssistant.js';
+import { lastInboundOf, replyWindowEndsAt } from './replyWindow.js';
 
 /** How far before a reply's row a usage row may have started and still be taken for the call that wrote it. */
 export const USAGE_MATCH_WINDOW_SECONDS = 180;
@@ -214,6 +215,8 @@ export function noReplyReasonOf(row: Record<string, unknown>): string | null {
  * UX US1 adds three fields (contracts/api.md, "Conversations"):
  *   - `handled_at`      the owner's "Mark handled" stamp (v45), or null: also null on a database that is behind, and ISO, like every stamp here;
  *   - `window_ends_at`  when Meta's 24 h reply window closes (the customer's last message + 24 h), or null when they have not written;
+ *   - `reply_window_ends_at`  when a reply typed in the inbox stops being accepted: `window_ends_at`, or the later end of an ad conversation's longer window
+ *                       when the owner switched `ads.extended_window` on (`replyWindow.ts`). The one rule the send route refuses by, so the page never counts its own;
  *   - `effective_ai`    who would answer this thread's next message (`effectiveAiOf`): the assistant's global switch, then the thread's own,
  *                       then the sales mode. `assistant` is what `loadAssistantState` read, or null when it could not be: then only the
  *                       thread's own switch can be said and the answer is never "off".
@@ -223,7 +226,8 @@ export function conversationView<T extends Record<string, unknown>>(
     platform: ConversationPlatform | null,
     clicks?: LinkClicks | null,
     assistant: AssistantState | null = null,
-    adNames?: ReadonlyMap<string, string> | null
+    adNames?: ReadonlyMap<string, string> | null,
+    extendedWindow?: { instagram: boolean; messenger: boolean } | null
 ) {
     return {
         ...row,
@@ -236,6 +240,7 @@ export function conversationView<T extends Record<string, unknown>>(
         ...salesView(row),
         handled_at: isoOrNull(row.handled_at),
         window_ends_at: windowEndsAtOf(row),
+        reply_window_ends_at: replyWindowEndsAt({ lastInboundAt: lastInboundOf(row), entrySource: entrySourceOf(row), extendedWindow })?.toISOString() ?? null,
         effective_ai: effectiveAiOf(row, assistant),
         link_clicks: clicks ?? null,
         message_count: countOf(row.message_count),

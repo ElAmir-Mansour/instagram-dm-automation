@@ -57,6 +57,7 @@ export const ERROR_CODES = {
     TIKTOK_NOT_CONNECTED: { status: [409], meaning: 'An action that needs TikTok, and TikTok is not connected (or needs reconnecting).' },
     TIKTOK_DIRECT_POST_UNAVAILABLE: { status: [409], meaning: 'Direct Post was asked for, but the portal switch is off or the connection lacks `video.publish`.' },
     TIKTOK_UPLOAD_PERMISSION_MISSING: { status: [409], meaning: 'Sending to TikTok drafts needs `video.upload`, which this connection does not have.' },
+    WINDOW_CLOSED: { status: [409], meaning: 'A reply typed on an Instagram or Facebook thread after Meta\'s reply window closed (24 hours from the customer\'s last message, or an ad conversation\'s longer window): refused before Meta is asked. `closedAt` says when it closed (null when only Meta said so).', params: ['closedAt'] },
     WHATSAPP_WINDOW_CLOSED: { status: [409], meaning: 'A reply typed on a WhatsApp thread more than 24 hours after the customer\'s last message (and outside any free-entry window): WhatsApp takes no free-form message then. `closes_at` says when it closed.', params: ['closes_at'] },
 
     // ─── The AI agents ──────────────────────────────────────────────────────────────────────────────────

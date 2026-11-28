@@ -3819,6 +3819,11 @@ the customer is never answered twice (`wa.answered_unrecorded`).
 `kind: 'operator'`, then the bot is paused exactly as the Instagram branch pauses it. A closed window is **`409 WHATSAPP_WINDOW_CLOSED`** with `closes_at`, no request to Meta;
 a refused connection or a billable reply is a 409; a message Meta did not take is a 502 with nothing stored and the bot still on; text over 4,096 characters is a 400, not a cut.
 
+An **Instagram or Facebook** reply is refused the same way when Meta's window has closed (R1-I1): **`409 WINDOW_CLOSED`** with `closedAt`, before any request to Meta, nothing stored, the bot not paused. The rule is
+`replyWindowEndsAt` (`src/services/replyWindow.ts`): a manual send is `messaging_type: RESPONSE` with no message tag, so 24 hours from the customer's last message, or an ad conversation's
+7 days less an hour from the click when `ads.extended_window` is on for that platform. The list and `GET /conversations/:id` send the same instant as `reply_window_ends_at`, so the Inbox replaces the reply box
+with the closed notice from it and counts nothing itself. If Meta still refuses (code 10, subcode 2018278 or 2534022) the answer is the same 409 with `closedAt: null`.
+
 ### 10.13 — A tester says stop, sends a voice note or a file, or arrives through a link (W6, W7, W8 wired in)
 
 All of this is behind **`isTestSender`**: a stranger's message is stored as metadata only, as in §10.5. For a listed tester the handler (**`whatsappInbound.ts:351`** `storeInbound`) does these things, in this order,
@@ -4240,7 +4245,7 @@ first touch counts: a conversation belongs to the ad that started it. A failure 
 
 `npm run migrate` (v54: `ad_touches`, `no_reply_reason`, the index) **before** the deploy: the DM path writes `ad_touches` and the Inbox reads both columns.
 The two switches ship dark. The ads spec's webhook contract and research note R10 (local planning documents, not in this repo) define them; the Help Center article `ads`
-(sections `message-ads-inbox`, `bot-and-ads`, `reply-window`, `business-ai`) is what the owner reads.
+(sections `message-ads-inbox`, `bot-and-ads`, `reply-window`) is what the owner reads; the Business AI section moved to the `inbox` article (`inbox#business-ai`), which a workspace without Ads still has.
 
 ### 12.6 — Results history: the day-by-day joins (A6)
 

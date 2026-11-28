@@ -196,7 +196,7 @@ const App = {
     },
 
     /** Must match the `?v=` the rest of the assets are served with. */
-    ASSET_VERSION: '13.20',
+    ASSET_VERSION: '13.21',
 
     _modules: Object.create(null),
 

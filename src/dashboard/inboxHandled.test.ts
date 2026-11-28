@@ -399,7 +399,10 @@ describe('Inbox: Mark handled takes a thread out of To do and every count at onc
         show(r, [thread]);
         assert.equal(String(r.Inbox.rowActionMarkup(thread)), '');
         assert.equal(String(r.Inbox.handledSlotMarkup(thread)), '');
-        assert.equal(String(r.Inbox.windowOfferMarkup(waiting({ last_inbound_message_at: ago(30 * HOUR) }))), '');
+        // A viewer still reads that the window closed (it is a fact about the thread), but is offered no button that writes.
+        const closedView = String(r.Inbox.windowOfferMarkup(waiting({ last_inbound_message_at: ago(30 * HOUR) })));
+        assert.ok(closedView.includes('data-window-closed'));
+        assert.doesNotMatch(closedView, /markHandled/);
         return r.Inbox.markHandled('c1').then(() => assert.deepEqual(r.calls, [], 'and a stray call goes nowhere'));
     });
 
@@ -574,8 +577,11 @@ describe('Inbox: Mark handled takes a thread out of To do and every count at onc
         assert.ok(before.includes('Needs you') && /left to reply/.test(before));
         handoff.handled_at = new Date().toISOString();
         const after = text(r.Inbox.metaMarkup(handoff));
-        assert.ok(!after.includes('Needs you') && !/left to reply/.test(after), after);
+        assert.ok(!after.includes('Needs you'), after);
         assert.ok(after.includes('Handled'));
+        // The countdown stays on every thread (R1-I1), but quietly once nobody has to act.
+        assert.ok(/left to reply/.test(after), after);
+        assert.match(String(r.Inbox.metaMarkup(handoff)), /chip chip-muted[^"]*"[^>]*><i[^>]*><\/i>23 h left to reply|chip-muted/);
     });
 
     it('paints the header slot poll-safely: written when it changes, never when it has not', () => {
@@ -611,7 +617,7 @@ describe('Inbox: once Meta\'s 24 h window has closed, the composer offers "Repli
         const thread = closed();
         show(r, [thread]);
         const offer = String(r.Inbox.windowOfferMarkup(thread));
-        assert.ok(text(offer).includes('The reply window has closed, so a reply from here cannot reach them. Reply from the Instagram app, then mark it handled.'), text(offer));
+        assert.ok(text(offer).includes('The reply window closed 6h ago, so a reply from here can’t reach them. Reply in the Instagram app.'), text(offer));
         assert.match(offer, /data-action="inbox:markHandled"/);
         assert.ok(offer.includes(`data-id="${thread.id}"`));
         assert.ok(text(offer).includes('Replied in Instagram: mark handled'));
@@ -623,6 +629,7 @@ describe('Inbox: once Meta\'s 24 h window has closed, the composer offers "Repli
         show(r, [thread]);
         const offer = text(r.Inbox.windowOfferMarkup(thread));
         assert.ok(offer.includes('Reply from your Page inbox on Facebook'));
+        assert.ok(!offer.includes('Open in Instagram'), 'no Instagram link on a Messenger thread');
         assert.ok(offer.includes('Replied on Facebook: mark handled'));
         assert.ok(!offer.includes('Instagram'));
     });
@@ -632,21 +639,35 @@ describe('Inbox: once Meta\'s 24 h window has closed, the composer offers "Repli
         const thread = closed();
         show(r, [thread]);
         const offer = text(r.Inbox.windowOfferMarkup(thread));
-        assert.ok(offer.includes('انتهت مهلة الردّ'));
+        assert.ok(offer.includes('أُغلقت مهلة الردّ منذ 6 ساعات، فلا يصل ردّ من هنا. ردّ من تطبيق إنستجرام.'), offer);
+        assert.ok(offer.includes('افتح في إنستجرام'));
         assert.ok(offer.includes('رددتُ في إنستجرام: تمّ التعامل'));
     });
 
-    it('offers nothing while the window is open (the owner can just reply), or once the thread is handled, or when nobody has to answer it, or when the customer has not written', () => {
+    it('offers nothing while the window is open, or when the customer has not written: the box is there', () => {
         const r = load();
         const cases: Array<[string, Json]> = [
             ['open', waiting({ last_inbound_message_at: ago(2 * HOUR) })],
-            ['handled', closed({ handled_at: new Date().toISOString() })],
-            ['the AI is answering', answered({ last_inbound_message_at: ago(30 * HOUR) })],
             ['no message from the customer', waiting({ last_inbound_message_at: null, last_inbound_at: null })],
+            ['a WhatsApp thread, which has its own window', closed({ platform: 'whatsapp' })],
         ];
         for (const [name, thread] of cases) {
             show(r, [thread]);
             assert.equal(String(r.Inbox.windowOfferMarkup(thread)), '', name);
+        }
+    });
+
+    it('says the window closed on EVERY thread that is past it, but offers "mark handled" only on a thread that is still to do', () => {
+        const r = load();
+        const todo = closed();
+        const handled = closed({ handled_at: new Date().toISOString() });
+        const answering = answered({ last_inbound_message_at: ago(30 * HOUR) });
+        show(r, [todo, handled, answering]);
+        assert.match(String(r.Inbox.windowOfferMarkup(todo)), /data-action="inbox:markHandled"/);
+        for (const thread of [handled, answering]) {
+            const offer = String(r.Inbox.windowOfferMarkup(thread));
+            assert.ok(offer.includes('data-window-closed'), 'the notice is there');
+            assert.doesNotMatch(offer, /markHandled/);
         }
     });
 

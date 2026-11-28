@@ -275,6 +275,9 @@ describe('what clears handled_at: a customer\'s message and nothing else', () =>
                 if (/FROM conversations c\s*JOIN creators cr/.test(sql)) {
                     return { rows: [{ ...THREAD, page_access_token: encryptSecret('page-token'), facebook_page_id: null }] };
                 }
+                // The customer wrote a minute ago, so Meta's window is open (a reply past it is refused before this point: `replyWindow.test.ts`).
+                if (/MAX\(created_at\) AS last_inbound_message_at FROM messages/.test(sql)) return { rows: [{ last_inbound_message_at: new Date(Date.now() - 60000) }] };
+                if (/FROM app_settings WHERE key = \$1/.test(sql)) return { rows: [] };
                 if (/INSERT INTO messages/.test(sql)) return { rows: [] };
                 if (/UPDATE conversations SET last_message_at = NOW\(\), is_bot_active = false/.test(sql)) return { rows: [] };
                 return undefined;

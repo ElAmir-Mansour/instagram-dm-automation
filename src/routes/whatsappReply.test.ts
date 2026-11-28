@@ -76,6 +76,9 @@ beforeEach(() => {
         if (sql.includes('FROM conversations WHERE id = $1 AND creator_id = $2')) return rows(thread && params[1] === TENANT ? [{ ...thread }] : []);
         if (sql.includes('FROM platform_connections')) return rows(connection ? [{ ...connection }] : []);
         if (sql.includes('FROM channel_usage')) return rows([{ n: String(freeUsed) }]);
+        // The Instagram and Facebook branch's window check (R1-I1): the customer wrote an hour ago, and the ads switch is not set.
+        if (sql.includes('MAX(created_at) AS last_inbound_message_at FROM messages')) return rows([{ last_inbound_message_at: new Date(NOW - 60 * 60 * 1000) }]);
+        if (sql.includes('FROM app_settings WHERE key = $1')) return rows([]);
         if (sql.startsWith('INSERT INTO messages')) return rows([{ id: 'msg-out-1' }]);
         if (sql.startsWith('UPDATE conversations SET last_message_at')) return { rows: [], rowCount: 1 };
         if (sql.startsWith("UPDATE platform_connections SET status = 'invalid'")) return { rows: [], rowCount: 1 };
