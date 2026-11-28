@@ -745,3 +745,24 @@ describe('Help Center — which AI the product uses', () => {
         });
     }
 });
+
+describe('Help Center — the Inbox badge is always on (R4-F1)', () => {
+    const app = readFileSync(join(process.cwd(), 'dashboard/js/app.js'), 'utf8');
+
+    it('notifications#in-app says the badge always works, and the shell feeds it from the first read on every page', () => {
+        assert.match(textOf('notifications', 'in-app', 'en'), /Inbox menu and Today always work/);
+        assert.match(textOf('notifications', 'in-app', 'ar'), /تعملان دائمًا/);
+        // What makes it true: the chrome starts the one poll for every session, and each answer sets the badge from the server's count.
+        assert.match(app, /this\.renderIdentity\(\);[\s\S]{0,900}this\.startAttentionPoll\(\);/);
+        assert.match(app, /applyAttention\(summary\) \{[\s\S]{0,300}this\.setInboxWaiting\(inbox\)/);
+    });
+
+    it('getting-started#today names the Inbox badge only: the Scheduler has no badge', () => {
+        for (const lang of ['en', 'ar'] as const) {
+            const text = textOf('getting-started', 'today', lang);
+            assert.equal(/Scheduler/.test(text) && /badge/.test(text.slice(text.indexOf('Scheduler') - 40, text.indexOf('Scheduler') + 20)), false);
+            assert.equal(/شارة «الرسائل» وعلى «الجدولة»/.test(text), false);
+        }
+        assert.match(textOf('getting-started', 'today', 'en'), /same number the \*\*Inbox\*\* badge shows/);
+    });
+});

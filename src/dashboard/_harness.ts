@@ -239,7 +239,7 @@ export function loadDashboard(options: LoadOptions = {}): Dashboard {
         lucide: { createIcons: noop },
         confirm: (message: string): boolean => { native.confirms.push(String(message)); return native.answer; },
         // No network in a test, and no API: a file that calls it without the test having stubbed it fails loudly.
-        API: new Proxy({}, { get: (_target, prop) => (prop === 'token' ? 'test-token' : () => Promise.reject(new Error(`API.${String(prop)} is not stubbed`))) }),
+        API: new Proxy({}, { get: (_target, prop) => (prop === 'token' ? 'test-token' : prop === 'forgetAttention' ? noop : () => Promise.reject(new Error(`API.${String(prop)} is not stubbed`))) }),
         ...(options.globals ?? {}),
     };
     ctx.globalThis = ctx;

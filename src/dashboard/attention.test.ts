@@ -311,8 +311,8 @@ describe('Attention is the only copy', () => {
         const badge: number[] = [];
         h.ctx.App = { setInboxWaiting: (n: number) => { badge.push(n); }, hashParam: () => '' };
         Inbox.threads = threads;
-        Inbox.reportWaiting();
-        assert.deepEqual(badge, [3], 'the Inbox reports the shared count');
+        assert.equal(Inbox.threads.filter((x: Json) => h.Attention.needsHuman(x)).length, 3, 'the Inbox\'s list holds the same three');
+        assert.deepEqual(badge, [], 'and sets no badge of its own: the shell shows the server\'s count');
 
         const Overview = h.run('OverviewPage');
         const res = { status: 'fulfilled', value: { items: [], counts: { inbox: 3, studio: 0, scheduler: 0 } } };

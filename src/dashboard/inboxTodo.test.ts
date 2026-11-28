@@ -140,9 +140,8 @@ describe('Inbox To do: it holds everything the badge counts', () => {
             assert.ok(shown.has(thread.id), `the badge counts ${JSON.stringify(thread)} and To do does not hold it`);
         }
         assert.ok(badgeThreads > 20, 'the table really has threads the badge counts');
-        Inbox.reportWaiting();
-        assert.equal(badge.at(-1), badgeThreads);
-        assert.ok(Inbox.todoCount() >= badge.at(-1)!, 'the To do number is never below the badge');
+        assert.equal(Inbox.todoCount() >= badgeThreads, true, 'the To do number is never below what the server counts for the badge (the same predicate)');
+        assert.deepEqual(badge, [], 'the Inbox sets no badge of its own: the shell shows the server\'s count');
     });
 
     it('a hot lead nobody has marked handled is in To do; one that has been marked is not, and Mark handled is offered on it', async () => {

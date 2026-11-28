@@ -89,7 +89,7 @@ function load(opts: { withCard?: boolean; lang?: 'ar' | 'en' } = {}) {
         return found;
     };
     const container = el('page-container');
-    const api: Record<string, (...args: unknown[]) => unknown> = {};
+    const api: Record<string, (...args: unknown[]) => unknown> = { forgetAttention: () => undefined };
     const calls: Array<{ name: string; args: unknown[] }> = [];
     const toasts: Array<{ message: string; type?: string }> = [];
     const confirms: Array<Record<string, unknown>> = [];

@@ -743,7 +743,7 @@ describe('Inbox sales view: the funnel card', () => {
 
     it('is not part of the poll: the thread list\'s tick never asks for it', () => {
         const source = readFileSync('dashboard/js/pages/inbox.js', 'utf8');
-        const poll = source.slice(source.indexOf('async loadThreads('), source.indexOf('/** SH3: the count on the Inbox nav item'));
+        const poll = source.slice(source.indexOf('async loadThreads('), source.indexOf('refreshBadge() {'));
         assert.equal(poll.includes('loadFunnel'), false);
         assert.equal(poll.includes('getDmFunnel'), false);
     });

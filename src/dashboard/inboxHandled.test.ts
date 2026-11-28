@@ -44,6 +44,7 @@ interface Rig {
     calls: Array<{ method: string; args: Json[] }>;
     api: Json;
     badge: number[];
+    refreshes: Json[];
     toasts: Array<{ message: string; arg: Json }>;
     undos: Array<{ message: string; opts: Json }>;
     viewer(): void;
@@ -52,6 +53,7 @@ interface Rig {
 function load(lang: 'ar' | 'en' = 'en'): Rig {
     const calls: Rig['calls'] = [];
     const badge: number[] = [];
+    const refreshes: Json[] = [];
     let operator = true;
     const api: Json = {
         token: 'tok',
@@ -59,7 +61,7 @@ function load(lang: 'ar' | 'en' = 'en'): Rig {
         unmarkConversationHandled: (id: string) => { calls.push({ method: 'unmark', args: [id] }); return Promise.resolve({ id, handled_at: null }); },
     };
     const App = {
-        canOperate: () => operator, setInboxWaiting: (n: number) => { badge.push(n); }, hashParam: () => '', route: (page: string) => `#/${page}`,
+        canOperate: () => operator, setInboxWaiting: (n: number) => { badge.push(n); }, refreshAttention: (o: Json) => { refreshes.push(o); return Promise.resolve(null); }, hashParam: () => '', route: (page: string) => `#/${page}`,
     };
     const h = loadDashboard({ lang, files: ['dashboard/js/pages/inbox.js'], globals: { API: api, App } });
     const Inbox = h.run('InboxPage');
@@ -67,7 +69,7 @@ function load(lang: 'ar' | 'en' = 'en'): Rig {
     const undos: Rig['undos'] = [];
     h.UI.toast = (message: string, arg: Json) => { toasts.push({ message, arg }); return null; };
     h.UI.undoToast = (message: string, opts: Json) => { undos.push({ message, opts }); return Promise.resolve(false); };
-    return { h, Inbox, calls, api, badge, toasts, undos, viewer: () => { operator = false; } };
+    return { h, Inbox, calls, api, badge, refreshes, toasts, undos, viewer: () => { operator = false; } };
 }
 
 /** Make the page's thread list `threads` and its one-reading-of-the-assistant `assistant`, the way a list answer does. */
@@ -410,8 +412,6 @@ describe('Inbox: Mark handled takes a thread out of To do and every count at onc
         const r = load();
         const thread = waiting();
         show(r, [thread]);
-        r.Inbox.reportWaiting();
-        assert.deepEqual(r.badge, [1]);
         let release: (v: Json) => void = () => {};
         r.api.markConversationHandled = (id: string) => { r.calls.push({ method: 'mark', args: [id] }); return new Promise((resolve) => { release = resolve; }); };
 
@@ -419,7 +419,8 @@ describe('Inbox: Mark handled takes a thread out of To do and every count at onc
         assert.deepEqual(plain(r.calls), [{ method: 'mark', args: ['c1'] }]);
         assert.ok(thread.handled_at, 'stamped now');
         assert.equal(r.h.Attention.needsHuman(thread), false, 'out of To do');
-        assert.equal(r.badge.at(-1), 0, 'the nav badge and the tab title follow at once');
+        assert.deepEqual(r.badge, [], 'the Inbox counts nothing itself: the badge is the server\'s count');
+        assert.deepEqual(r.refreshes, [], 'and it asks for that count once the server has answered');
         assert.equal(r.Inbox.needsReply(thread), false, 'out of the "Needs reply" filter and its count');
         assert.equal(r.Inbox.pendingHandled.has('c1'), true, 'held until the server answers');
         const row = String(r.Inbox.threadRow(thread));
@@ -431,6 +432,7 @@ describe('Inbox: Mark handled takes a thread out of To do and every count at onc
         await pending;
         assert.equal(thread.handled_at, '2026-10-19T09:00:00.000Z', 'the server\'s stamp replaces the optimistic one');
         assert.equal(r.Inbox.pendingHandled.size, 0);
+        assert.deepEqual(plain(r.refreshes), [{ force: true }], 'a forced read of the shared answer moves the badge and the title');
         assert.equal(r.h.Attention.isHandled({ ...thread, last_inbound_message_at: '2026-10-19T08:00:00.000Z', last_message_direction: 'outbound' }), true);
     });
 
@@ -447,7 +449,7 @@ describe('Inbox: Mark handled takes a thread out of To do and every count at onc
         assert.deepEqual(plain(r.calls.map((c) => c.method)), ['mark', 'unmark']);
         assert.equal(thread.handled_at, null);
         assert.equal(r.h.Attention.needsHuman(thread), true, 'back in To do');
-        assert.equal(r.badge.at(-1), 1);
+        assert.equal(r.refreshes.length, 2, 'Reopen asks for the count again');
     });
 
     it('Reopen from the header does the same and says so', async () => {
@@ -471,7 +473,7 @@ describe('Inbox: Mark handled takes a thread out of To do and every count at onc
         await r.Inbox.markHandled('c1');
         assert.equal(thread.handled_at, null, 'as it was');
         assert.equal(r.h.Attention.needsHuman(thread), true);
-        assert.equal(r.badge.at(-1), 1);
+        assert.equal(r.refreshes.length, 0, 'nothing changed on the server, so nothing is asked');
         assert.equal(r.undos.length, 0);
         assert.equal(r.toasts.length, 1);
         assert.equal(r.toasts[0]!.message, 'Conversation not found.');
@@ -563,8 +565,6 @@ describe('Inbox: Mark handled takes a thread out of To do and every count at onc
         assert.deepEqual(plain(r.Inbox.visibleThreads().map((x: Json) => x.id).sort()), ['done', 'hd'], 'Handled holds exactly those');
         r.Inbox.filter = 'all';
         assert.equal(r.Inbox.visibleThreads().length, 4, 'handled threads stay findable');
-        r.Inbox.reportWaiting();
-        assert.equal(r.badge.at(-1), 2, 'open + the handoff');
         r.Inbox.renderCount();
         assert.equal(r.Inbox.todoCount(), 2, 'the To do count is the same two');
     });

@@ -601,8 +601,25 @@ const API = {
     // only ever queue work for it or read what it has finished. A 400 carries
     // `problems: string[]` from validateCarousel on `err.body`.
     getStudioStatus: () => API.request('/studio/status'),
-    /** What needs the owner, from columns only (src/services/attention.ts): the Studio's items and `counts.studio` are read from it. */
-    getAttention: () => API.request('/attention'),
+    /**
+     * What needs the owner, from columns only (src/services/attention.ts): the Inbox count, the Studio's items, the admin dot and Today all read it.
+     * ONE answer is shared: a read in flight is joined, and an answer under 30 s old is reused. `force` asks again (a tab coming back, Today after
+     * Archive or Mark handled). A failed read is never kept. `forgetAttention` drops it (sign-out, another workspace).
+     */
+    ATTENTION_CACHE_MS: 30000,
+    _attention: null,
+    getAttention(options = {}) {
+        const cached = API._attention;
+        if (options.force !== true && cached && (cached.at === 0 || Date.now() - cached.at < API.ATTENTION_CACHE_MS)) return cached.promise;
+        const entry = { at: 0, promise: null };
+        entry.promise = API.request('/attention').then(
+            (value) => { entry.at = Date.now(); return value; },
+            (err) => { if (API._attention === entry) API._attention = null; throw err; },
+        );
+        API._attention = entry;
+        return entry.promise;
+    },
+    forgetAttention() { API._attention = null; },
     // U3 (notify_card.js, overview.js): how each person is told, and the owner's go-live checklist.
     getNotifyMe: () => API.request('/notify/me'),
     startTelegramLink: () => API.request('/notify/telegram/link', { method: 'POST' }),
