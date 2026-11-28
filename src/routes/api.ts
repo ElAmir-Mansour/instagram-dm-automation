@@ -51,6 +51,7 @@ import {
 } from '../services/autoArchive.js';
 import { checkMacAlarms } from '../services/studio/macHealth.js';
 import { actorFromSession, AUDIT_ACTIONS, writeAudit } from '../services/audit.js';
+import { getMonteurSettings } from '../services/studio/settings.js';
 import { MODULE_API_PREFIXES, readModules, refuseOffPlatforms, requireModule, type ModulesView } from '../services/modules.js';
 import { passwordProblem } from '../services/adminGuards.js';
 import { clearLoginFailures, clientIp, loginRetryAfter, recordLoginFailure } from '../services/loginThrottle.js';
@@ -1676,6 +1677,18 @@ router.get('/auth/me', async (req, res) => {
             }
         }
 
+        // The workspace's own clock (R2-SC-1): the zone the Scheduler's cards, the composer and the editors read times in. It is the same
+        // value Studio settings call `schedule.timezone`, but `/studio/settings` is closed to viewers, and every role needs the zone.
+        // '' when it cannot be read: the dashboard then keeps the zone it already had.
+        let timezone = '';
+        if (tenantId && modules) {
+            try {
+                timezone = (await getMonteurSettings(tenantId)).timezone || '';
+            } catch (err) {
+                log('warn', 'workspace.timezone_read_failed', { ...describeError(err) });
+            }
+        }
+
         res.json({
             userId: session.userId,
             role: session.role,
@@ -1684,7 +1697,7 @@ router.get('/auth/me', async (req, res) => {
             tenants,
             onboarding,
             modules: modules ? modules.on : null,
-            workspace: modules ? { owner: modules.owner, metaConnect: modules.metaConnect } : null,
+            workspace: modules ? { owner: modules.owner, metaConnect: modules.metaConnect, timezone } : null,
         });
     } catch (err) {
         log('error', 'api.session_identity_failed', describeError(err));
