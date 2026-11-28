@@ -851,7 +851,7 @@ const WelcomePage = {
                 <p class="form-label" id="welcome-portrait-label">${t('welcome.brand.portrait')}</p>
                 <p class="form-hint welcome-portrait-hint">${t('welcome.brand.portraitHint')}</p>
                 <div class="welcome-portrait-actions">
-                    <input class="sr-only welcome-file-input" id="welcome-portrait" type="file" accept="image/png,image/jpeg,image/webp"
+                    <input class="sr-only file-input" id="welcome-portrait" type="file" accept="image/png,image/jpeg,image/webp"
                            data-change="welcome:portrait" aria-describedby="welcome-portrait-label">
                     <label class="btn btn-secondary welcome-file" for="welcome-portrait">
                         <i data-lucide="image-plus" aria-hidden="true"></i>

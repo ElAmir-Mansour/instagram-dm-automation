@@ -274,18 +274,18 @@ const AdsLeadsPage = {
                 <div class="adsleads-filters">
                     <div class="form-group">
                         <label class="form-label" for="adsleads-filter-form">${t('ads.leads.filter.form')}</label>
-                        <select class="form-input" id="adsleads-filter-form" data-change="adsleads:filter">
+                        <select class="select" id="adsleads-filter-form" data-change="adsleads:filter">
                             <option value="">${t('ads.leads.filter.allForms')}</option>
                             ${forms.map((f) => html`<option value="${f.id}" ${this.filters.formId === f.id ? html.raw('selected') : ''}>${f.name}</option>`)}
                         </select>
                     </div>
                     <div class="form-group">
                         <label class="form-label" for="adsleads-filter-from">${t('ads.leads.filter.from')}</label>
-                        <input class="form-input" type="date" id="adsleads-filter-from" value="${this.filters.from}" data-change="adsleads:filter">
+                        <input class="field" type="date" id="adsleads-filter-from" value="${this.filters.from}" data-change="adsleads:filter">
                     </div>
                     <div class="form-group">
                         <label class="form-label" for="adsleads-filter-to">${t('ads.leads.filter.to')}</label>
-                        <input class="form-input" type="date" id="adsleads-filter-to" value="${this.filters.to}" data-change="adsleads:filter">
+                        <input class="field" type="date" id="adsleads-filter-to" value="${this.filters.to}" data-change="adsleads:filter">
                     </div>
                 </div>
                 <p class="adsleads-csv">
@@ -338,7 +338,7 @@ const AdsLeadsPage = {
         return html`
             <div class="form-group adsleads-custom" id="adsleads-custom-${i}">
                 <label class="form-label" for="adsleads-custom-label-${i}">${t('ads.leads.form.customLabel', { n: `⁦${i + 1}⁩` })}</label>
-                <input class="form-input" id="adsleads-custom-label-${i}" maxlength="80" dir="auto" autocomplete="off" data-input="adsleads:checkLabel" data-index="${i}">
+                <input class="field" id="adsleads-custom-label-${i}" maxlength="80" dir="auto" autocomplete="off" data-input="adsleads:checkLabel" data-index="${i}">
                 <p class="form-error" id="adsleads-custom-warn-${i}" hidden>${t('ads.leads.form.restricted')}</p>
             </div>
         `;
@@ -356,11 +356,11 @@ const AdsLeadsPage = {
             <form id="adsleads-form" novalidate>
                 <div class="form-group">
                     <label class="form-label" for="adsleads-name">${t('ads.leads.form.name')}</label>
-                    <input class="form-input" id="adsleads-name" maxlength="100" dir="auto" autocomplete="off">
+                    <input class="field" id="adsleads-name" maxlength="100" dir="auto" autocomplete="off">
                 </div>
                 <div class="form-group">
                     <label class="form-label" for="adsleads-locale">${t('ads.leads.form.locale')}</label>
-                    <select class="form-input" id="adsleads-locale">
+                    <select class="select" id="adsleads-locale">
                         <option value="AR_AR">${t('ads.leads.form.locale.ar')}</option>
                         <option value="EN_US">${t('ads.leads.form.locale.en')}</option>
                     </select>
@@ -386,13 +386,13 @@ const AdsLeadsPage = {
                 <fieldset class="form-group fieldset-plain">
                     <legend class="form-label">${t('ads.leads.form.thankYou')}</legend>
                     <label class="form-label" for="adsleads-ty-title">${t('ads.leads.form.tyTitle')}</label>
-                    <input class="form-input" id="adsleads-ty-title" maxlength="60" dir="auto">
+                    <input class="field" id="adsleads-ty-title" maxlength="60" dir="auto">
                     <label class="form-label" for="adsleads-ty-body">${t('ads.leads.form.tyBody')}</label>
-                    <input class="form-input" id="adsleads-ty-body" maxlength="160" dir="auto">
+                    <input class="field" id="adsleads-ty-body" maxlength="160" dir="auto">
                     <label class="form-label" for="adsleads-ty-button">${t('ads.leads.form.tyButton')}</label>
-                    <input class="form-input" id="adsleads-ty-button" maxlength="30" dir="auto">
+                    <input class="field" id="adsleads-ty-button" maxlength="30" dir="auto">
                     <label class="form-label" for="adsleads-ty-url">${t('ads.leads.form.tyUrl')}</label>
-                    <input class="form-input" id="adsleads-ty-url" type="url" dir="ltr" placeholder="https://">
+                    <input class="field" id="adsleads-ty-url" type="url" dir="ltr" placeholder="https://">
                 </fieldset>
                 <p class="form-hint">${t('ads.leads.form.privacy')}</p>
                 <div id="adsleads-form-error"></div>
@@ -407,7 +407,10 @@ const AdsLeadsPage = {
     checkLabel(el) {
         if (!el) return;
         const warn = document.getElementById(`adsleads-custom-warn-${el.dataset.index}`);
-        if (warn) warn.hidden = !this.restrictedHint(el.value);
+        if (!warn) return;
+        warn.hidden = !this.restrictedHint(el.value);
+        if (warn.hidden) UI.unlinkError(el, warn.id);
+        else UI.linkError(el, warn.id);
     },
 
     /** The dialog's values as the server's FormInput. */
@@ -433,9 +436,9 @@ const AdsLeadsPage = {
     async create() {
         const input = this.readForm();
         const error = document.getElementById('adsleads-form-error');
-        if (error) error.innerHTML = '';
+        UI.formError(error, '');
         if (input.questions.some((q) => q.type === 'CUSTOM' && this.restrictedHint(q.label))) {
-            if (error) error.innerHTML = esc(html`<p class="form-error">${t('ads.leads.form.restricted')}</p>`);
+            UI.formError(error, t('ads.leads.form.restricted'));
             return;
         }
         try {
@@ -445,7 +448,7 @@ const AdsLeadsPage = {
             if (answer && answer.form && this.data) this.data.forms = [answer.form, ...this.forms().filter((f) => f.id !== answer.form.id)];
             this.paint();
         } catch (err) {
-            if (error) error.innerHTML = esc(html`<p class="form-error" dir="auto">${this.refusalText(err)}</p>`);
+            UI.formError(error, this.refusalText(err), { dir: 'auto' });
         }
     },
 };

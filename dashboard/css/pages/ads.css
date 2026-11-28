@@ -134,7 +134,7 @@
 .adsc-results { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-1); }
 .adsc-results .btn { justify-content: flex-start; text-align: start; inline-size: 100%; }
 .adsc-ice { display: flex; align-items: center; gap: var(--space-2); }
-.adsc-ice .form-input { flex: 1 1 auto; min-inline-size: 0; }
+.adsc-ice .field { flex: 1 1 auto; min-inline-size: 0; }
 .adsc-days { display: grid; grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr)); gap: var(--space-1) var(--space-3); }
 .adsc-progress { inline-size: 100%; block-size: var(--space-2); accent-color: var(--accent-text); }
 .adsc-money { display: flex; flex-direction: column; gap: var(--space-1); font-size: var(--fs-200); color: var(--text-default); }
@@ -250,6 +250,6 @@
 .adsrule-skip { color: var(--text-muted); }
 .adsrule-form { display: flex; flex-direction: column; gap: var(--space-3); }
 .adsrule-cond { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
-.adsrule-cond .form-input { inline-size: auto; flex: 1 1 8rem; min-block-size: var(--tap-target); }
+.adsrule-cond .field, .adsrule-cond .select { inline-size: auto; flex: 1 1 8rem; min-block-size: var(--tap-target); }
 .adsrule-objects { max-block-size: 14rem; overflow-y: auto; }
 .adsrule-asks { display: flex; gap: var(--space-2); padding: var(--space-3); margin: 0; }
