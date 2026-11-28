@@ -426,7 +426,10 @@ const TenantsPage = {
             const budgets = (ai && ai.budgets) || {};
             const money = (n) => (typeof n === 'number' && Number.isFinite(n) ? `$${n}` : t('tenants.create.aiNoLimit'));
             if (line && line.isConnected) {
-                line.textContent = t('tenants.create.aiCaps', { daily: money(budgets.tenantDailyUsd), monthly: money(budgets.tenantMonthlyUsd) });
+                const capped = (n) => typeof n === 'number' && Number.isFinite(n);
+                line.textContent = capped(budgets.tenantDailyUsd) || capped(budgets.tenantMonthlyUsd)
+                    ? t('tenants.create.aiCaps', { daily: money(budgets.tenantDailyUsd), monthly: money(budgets.tenantMonthlyUsd) })
+                    : t('tenants.create.aiCapsNone');
                 line.hidden = false;
             }
         } catch (_err) { /* the line stays hidden: it is information, not a control */ }

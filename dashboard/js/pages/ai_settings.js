@@ -2058,6 +2058,8 @@ const AiSettingsPage = {
      * library that was forgotten is dropped too. When a reel is still waiting the next ask is scheduled.
      */
     async loadMuseLibrary(opts) {
+        // A workspace without Meta vision has no card to fill, and the server would only refuse (404 MODULE_OFF, a console error).
+        if (!this.moduleOn('muse')) return;
         const lib = this.museLibState();
         const quiet = !!(opts && opts.quiet);
         const mine = ++lib.asks;
