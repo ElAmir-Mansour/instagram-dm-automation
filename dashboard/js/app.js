@@ -196,7 +196,7 @@ const App = {
     },
 
     /** Must match the `?v=` the rest of the assets are served with. */
-    ASSET_VERSION: '13.19',
+    ASSET_VERSION: '13.20',
 
     _modules: Object.create(null),
 
@@ -279,6 +279,14 @@ const App = {
     subtitle(page) {
         // Settings (U3): the owner's sentence names the team; anyone else gets one that names no role.
         if (page === 'settings' && !this.canAdminister()) return t('page.settings.subtitleMember');
+        // The Scheduler names the platforms THIS workspace has (a company workspace has no TikTok or YouTube).
+        if (page === 'posts') {
+            const tiktok = this.hasModule('tiktok');
+            const youtube = this.hasModule('youtube');
+            if (!tiktok && !youtube) return t('page.posts.subtitleMeta');
+            if (!youtube) return t('page.posts.subtitleTikTok');
+            if (!tiktok) return t('page.posts.subtitleYouTube');
+        }
         return t(`page.${page}.subtitle`);
     },
 

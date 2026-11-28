@@ -442,8 +442,10 @@ export const MODULE_API_PREFIXES: ReadonlyArray<{ module: ModuleId; prefix: stri
     { module: 'dm_assistant', prefix: '/dm/ice-breakers' },
     { module: 'dm_assistant', prefix: '/dm/funnel' },
     { module: 'muse', prefix: '/settings/ai/muse' },
-    { module: 'tiktok', prefix: '/tiktok' },
-    { module: 'youtube', prefix: '/youtube' },
+    // `/app-settings` is the PLATFORM's TikTok / YouTube app (platform admin only, the same for every workspace): a platform admin acting as a
+    // workspace without the module must still read and save it (Settings → Platform), so it is never the workspace's module to refuse.
+    { module: 'tiktok', prefix: '/tiktok', exceptPrefix: ['/app-settings'] },
+    { module: 'youtube', prefix: '/youtube', exceptPrefix: ['/app-settings'] },
     { module: 'whatsapp', prefix: '/whatsapp' },
     // The Scheduler reads the workspace's time zone from `GET /studio/settings` (`PostsPage.shareZone`).
     { module: 'studio', prefix: '/studio', exceptGet: ['/settings'], exceptPrefix: ['/explainers'] },

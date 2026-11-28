@@ -281,6 +281,10 @@ const TenantDetailPage = {
             const saved = await API.saveAdminTenantModules(this.tenantId, body);
             UI.toast(t('tenantModules.saved'));
             this.paintModules(saved);
+            // The workspace this session is acting as: its menu and its pages follow the new modules now, not at the next page load.
+            if (typeof App !== 'undefined' && App.session && String(App.session.tenantId) === String(this.tenantId) && typeof App.refreshSession === 'function') {
+                try { await App.refreshSession(); } catch { /* the menu catches up at the next page load */ }
+            }
         } catch (err) {
             restore();
             // The server's refusal in the person's words (`errors.<CODE>`), next to the field. A missing ceiling points at Client ads, where it can also be set.

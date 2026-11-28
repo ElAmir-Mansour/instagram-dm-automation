@@ -134,6 +134,9 @@ img, video, canvas { display: block; max-width: 100%; }
 table { border-collapse: collapse; }
 
 .hidden { display: none !important; }
+/* The `hidden` attribute, the same way. A component's own `display` (`.btn { display: inline-flex }`) beats the browser's `[hidden]` rule, so a
+   `<button class="btn" hidden>` was drawn anyway: the New workspace dialog showed Next on its last step and Create on its first (2026-11-28). */
+[hidden]:not([hidden='until-found']) { display: none !important; }
 
 /* ─── Bidi helpers ───────────────────────────────────────────────────────────
    Latin runs — IDs, URLs, @handles, tokens — inside an Arabic sentence must be

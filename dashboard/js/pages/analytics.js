@@ -398,6 +398,8 @@ const AnalyticsPage = {
     async fillAdRows(days, live) {
         const host = document.getElementById('analytics-ad-rows');
         if (!host || typeof API.getAdsResults !== 'function') return;
+        // A workspace without Ads has no rows to show, and the server would only refuse (404 ADS_DISABLED, a console error).
+        if (typeof App !== 'undefined' && typeof App.hasModule === 'function' && !App.hasModule('ads')) { host.hidden = true; return; }
         const to = new Date().toISOString().slice(0, 10);
         const from = new Date(Date.now() - (Math.max(1, Number(days) || 1) - 1) * 86400000).toISOString().slice(0, 10);
         let answer;

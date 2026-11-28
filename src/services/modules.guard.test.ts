@@ -186,6 +186,18 @@ describe('what is NOT gated, by design', () => {
         assert.equal((await through('GET', '/studio/status', COMPANY)).status, 404);
     });
 
+    it('the platform\'s TikTok and YouTube app settings stay open in any workspace (platform admin, Settings → Platform), and nothing else of theirs does', async () => {
+        for (const app of ['/tiktok', '/youtube']) {
+            assert.equal((await through('GET', `${app}/app-settings`, COMPANY)).reached, true, `GET ${app}/app-settings`);
+            assert.equal((await through('POST', `${app}/app-settings`, COMPANY)).reached, true, `POST ${app}/app-settings`);
+            const other = await through('GET', `${app}/connection`, COMPANY);
+            assert.equal(other.status, 404, `${app}/connection is still the workspace's module`);
+            assert.equal(other.body?.code, 'MODULE_OFF');
+        }
+        assert.deepEqual(MODULE_API_PREFIXES.filter((r) => r.exceptPrefix).map((r) => [r.prefix, r.exceptPrefix]),
+            [['/tiktok', ['/app-settings']], ['/youtube', ['/app-settings']], ['/studio', ['/explainers']]]);
+    });
+
     it('GET /posts/live stays open: the Keyword replies post picker reads it, with or without the Scheduler', async () => {
         settings.set(`tenant.modules.${COMPANY}`, JSON.stringify({ ...COMPANY_DOC, on: ['keyword_replies'] }));
         assert.equal((await through('GET', '/posts/live', COMPANY)).reached, true);

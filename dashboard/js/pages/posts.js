@@ -603,7 +603,7 @@ const PostsPage = {
         if (this.posts.length === 0) {
             return html`
                 <div class="surface pad-5 stack gap-3">
-                    ${Admin.emptyState('calendar-days', t('posts.emptyQueueTitle'), t('posts.emptyQueueBody'))}
+                    ${Admin.emptyState('calendar-days', t('posts.emptyQueueTitle'), this.emptyQueueBody())}
                     <div class="row row--center">
                         ${UI.button({
                             variant: 'primary', size: 'sm', icon: 'plus', label: t('posts.new'),
@@ -1534,6 +1534,26 @@ const PostsPage = {
 
     PLATFORMS: Object.freeze(['instagram', 'facebook', 'both', 'tiktok']),
 
+    /** Does this workspace have the module? Fail-open like the shell: no `modules` in the session (an older server) means every module is on. */
+    hasModule(id) {
+        return typeof App === 'undefined' || typeof App.hasModule !== 'function' || App.hasModule(id);
+    },
+
+    /** The platforms a post may be MADE for here: TikTok only in a workspace that has it, because the server refuses the rest (404 MODULE_OFF). */
+    offeredPlatforms() {
+        return this.PLATFORMS.filter((p) => p !== 'tiktok' || this.hasModule('tiktok'));
+    },
+
+    /** The empty queue's sentence, naming only the platforms this workspace has: Instagram and Facebook, plus TikTok and YouTube when it has them. */
+    emptyQueueBody() {
+        const tiktok = this.hasModule('tiktok');
+        const youtube = this.hasModule('youtube');
+        if (tiktok && youtube) return t('posts.emptyQueueBody');
+        if (tiktok) return t('posts.emptyQueueBodyTikTok');
+        if (youtube) return t('posts.emptyQueueBodyYouTube');
+        return t('posts.emptyQueueBodyMeta');
+    },
+
     platformLabel(platform) {
         if (platform === 'facebook') return t('common.facebook');
         if (platform === 'both') return t('common.both');
@@ -1546,7 +1566,10 @@ const PostsPage = {
     platformOptions(selected) {
         // A YouTube row (made by the Monteur) keeps its platform when edited: the composer does not
         // offer YouTube for a new post, but the select must not silently turn this one into Instagram.
-        const list = selected === 'youtube' ? [...this.PLATFORMS, 'youtube'] : this.PLATFORMS;
+        // The same for a TikTok row in a workspace that no longer has TikTok: it keeps its platform, and no NEW post is offered TikTok there.
+        const offered = this.offeredPlatforms();
+        const keep = (selected === 'youtube' || selected === 'tiktok') && !offered.includes(selected) ? [selected] : [];
+        const list = [...offered, ...keep];
         return list.map((p) => html`
             <option value="${p}" ${p === selected ? html.raw('selected') : ''}>${this.platformLabel(p)}</option>
         `);
@@ -1568,7 +1591,7 @@ const PostsPage = {
             stored = null;
         }
         const p = stored && typeof stored === 'object' ? stored : {};
-        const platform = this.PLATFORMS.includes(p.platform) ? p.platform : 'instagram';
+        const platform = this.offeredPlatforms().includes(p.platform) ? p.platform : 'instagram';
         const type = this.typeAllowedOn(p.type, platform) ? p.type : 'image';
         return { platform, type };
     },
@@ -4086,7 +4109,7 @@ const PostsPage = {
                         ${this.typeOptions(prefs.platform, prefs.type)}
                     </select>
                 </div>
-                ${this.tiktokFields(true)}
+                ${this.tiktokFields(this.hasModule('tiktok'))}
                 ${this.captionField('')}
                 ${this.firstCommentField(null)}
                 ${this.tiktokTitleField()}
@@ -4391,7 +4414,7 @@ const PostsPage = {
 
         const alsoGroup = document.getElementById('tiktok-also-group');
         const also = document.getElementById('post-also-tiktok');
-        const offerAlso = platform !== 'tiktok' && this.typeAllowedOn(type, 'tiktok');
+        const offerAlso = platform !== 'tiktok' && this.typeAllowedOn(type, 'tiktok') && this.hasModule('tiktok');
         if (alsoGroup) alsoGroup.classList.toggle('hidden', !offerAlso);
         if (also && !offerAlso) also.checked = false;
 

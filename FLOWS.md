@@ -4643,7 +4643,8 @@ has is one small document, and the server, `/auth/me` and the dashboard's shell 
    Answers are cached per instance for `MODULES_CACHE_MS` (30 s): **another warm instance answers the old way for up to 30 s after a change**. The cheap read (`readDocModules`,
    one statement for a workspace with no document) is what the gate, the attention summary, the profile's next actions and Muse use.
 4. **The gate.** `requireModule(id)` is mounted once per row of `MODULE_API_PREFIXES`, directly below `resolveTenant` in `src/routes/api.ts`, so the workspace is the session's own. An
-   off module answers 404 `MODULE_OFF { module }`. Open on purpose: `/posts/live`, `GET /studio/settings` (the Scheduler reads the time zone from it), `/studio/explainers*` (its own
+   off module answers 404 `MODULE_OFF { module }`. Open on purpose: `/posts/live`, `GET /studio/settings` (the Scheduler reads the time zone from it), `/tiktok/app-settings` and
+   `/youtube/app-settings` (the PLATFORM's apps, platform admin only: Settings → Platform must work while the admin acts as a company workspace), `/studio/explainers*` (its own
    `EXPLAINERS_DISABLED`), `/ads` (its own `ADS_DISABLED`), and every route no module owns (stats, interactions, uploads, the profile, Meta, onboarding, attention, tenant health).
    `refuseOffPlatforms` reads the body of a post: `platform: 'tiktok'` or `also_tiktok` with TikTok off, or `platform: 'youtube'` with YouTube off, is 404 `MODULE_OFF` for that module.
    **Background work is not gated** (the drain, the publisher, the sweeps, the webhooks): a TikTok row already scheduled still publishes. The exception is Muse: `readMuseSettings`
@@ -4652,7 +4653,9 @@ has is one small document, and the server, `/auth/me` and the dashboard's shell 
    the two Mac items: studio; a broken TikTok, YouTube or WhatsApp connection: that module; a broken Meta connection is everyone's) and zeroes its nav count. `nextBestActions`
    offers only the actions of modules the workspace has (the meter does not move). `GET /api/auth/me` carries `modules` (the ids that are on) and `workspace` (`{ owner, metaConnect }`),
    both null with no workspace or when the read fails: a client that finds no `modules` array treats the workspace as everything on. The dashboard's `Shell` (PR B) then hides the
-   screen, and a 404 `MODULE_OFF` seen mid-session sends it to Today after one refresh of the session.
+   screen, and a 404 `MODULE_OFF` seen mid-session sends it to Today after one refresh of the session. A page offers nothing of an off module either: the Scheduler's composer
+   offers TikTok (the platform and "Also send to TikTok") only with `tiktok` on, and its subtitle and empty queue name only the workspace's platforms; saving the modules of the
+   workspace the session acts as refreshes the session at once (`TenantDetailPage.saveModules`).
 6. **Connect with Facebook** is the platform switch AND the workspace's `metaConnect: 'self'` ([§8.6](#86--the-operators-settings)); the wizard's W4 `connect` flag is the same pair (`readWizardFlags(creatorId)`).
 7. **Making a link.** `issueInvite` (`src/services/inviteIssue.ts`, moved out of `admin.ts` unchanged) is what the admin's invite routes, creating a workspace by name, and (PR C) the owner's Team
    routes use; `opts.actor` (`'admin'` by default, `'tenant'`) is only the actor of the funnel's `invite_created` event, and a reset link writes none.
@@ -4855,7 +4858,7 @@ production sets no `LOG_LEVEL`, so a row whose only evidence is marked *(debug)*
 | 2 | **a staff member gets no Telegram notice**: the platform has no bot token (nothing is read, nothing sent), they never linked, they paused it, the owner's routing leaves them out, or they are a platform admin — `notifyPeople`, `coveredBy`, `recipientChats` | `notify.people_sent` / `notify.people_failed` (counts only); *(none)* when nobody is to be told | no: the Inbox badge and Today still show it |
 | 2 | **linking never completes**: the code expired (10 min) or was spent, the bot has a webhook (`getUpdates` answers 409), or the person pressed Start in a group — `confirmLink` | `notify.telegram_link_poll_failed` (`status`), the answer `410 TELEGRAM_LINK_EXPIRED` | the code row in `oauth_states`; nothing is kept until a private `/start <code>` is found |
 | 16 | the go-live card never shows: the platform owner's workspace, no `onboarding` row, not the owner, hidden, or live over 3 days — `readGoLive` | *(none)*: the answer is `{ show: false }` | no |
-| 17 | **a module is off**: a request for one of its routes — `requireModule`, **`src/services/modules.ts`** | *(none: 404 `MODULE_OFF { module }`)* | no; the dashboard sends the person to Today after refreshing its session. Open on purpose: `/posts/live`, `GET /studio/settings`, `/ads`, `/studio/explainers*` |
+| 17 | **a module is off**: a request for one of its routes — `requireModule`, **`src/services/modules.ts`** | *(none: 404 `MODULE_OFF { module }`)* | no; the dashboard sends the person to Today after refreshing its session. Open on purpose: `/posts/live`, `GET /studio/settings`, `/tiktok/app-settings`, `/youtube/app-settings`, `/ads`, `/studio/explainers*` |
 | 17 | **a modules document that cannot be read** (not JSON, not `v: 1`, no `on` list) — `readModules` | `modules.doc_unreadable` (`warn`) | no: the workspace reads as everything on (legacy), so nobody loses a screen |
 | 17 | a module id in a document this build does not know — `parseModulesDoc` | `modules.doc_unknown_id` (`warn`, `module`) | no: that id is dropped, the rest of the document is read |
 | 17 | a post for TikTok or YouTube from a workspace without that module — `refuseOffPlatforms` | *(none: 404 `MODULE_OFF`)* | no |
