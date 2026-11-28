@@ -250,17 +250,17 @@ describe('Inbox on a phone (860 px and below, a conversation open)', () => {
         created_at: ago(30 * DAY), message_count: 12, ad: { name: 'Autumn' }, last_link_at: ago(HOUR), ...over,
     });
 
-    it('shows three chips (the stage, the window, follows you) and "More about <name>", with the rest behind it', () => {
+    it('shows two chips (the stage, the window) and "More about <name>", with the rest behind it', () => {
         const { Inbox } = load({ phone: true });
         const thread = full();
         const markup = String(Inbox.metaMarkup(thread));
         const chips = (markup.match(/class="chip[ "]/g) || []).length;
-        assert.equal(chips, 4, '3 chips and the More chip');
+        assert.equal(chips, 3, '2 chips and the More chip');
         const words = text(markup);
         assert.ok(words.includes('Stage:') || /link/i.test(words), words);
         assert.ok(words.includes('left to reply'));
-        assert.ok(words.includes('Follows you'));
         assert.ok(words.includes('More about Sara'));
+        assert.ok(!words.includes('Follows you'), 'whether they follow you is behind More, not a third chip');
         assert.ok(!words.includes('12 messages') && !words.includes('Verified') && !words.includes('Autumn'), 'the rest is not in the strip');
         assert.match(markup, /id="chat-meta-more"[^>]*aria-expanded="false"/);
     });
@@ -273,7 +273,7 @@ describe('Inbox on a phone (860 px and below, a conversation open)', () => {
         h.el('chat-meta');
         Inbox.toggleMeta(thread.id);
         const markup = String(Inbox.metaMarkup(thread));
-        assert.ok(text(markup).includes('12 messages') && text(markup).includes('Autumn'));
+        assert.ok(text(markup).includes('12 messages') && text(markup).includes('Autumn') && text(markup).includes('Follows you'));
         assert.ok(text(markup).includes('Show less'));
         assert.match(markup, /aria-expanded="true"/);
         assert.doesNotMatch(String(Inbox.metaMarkup({ ...thread, id: 'other' })), /aria-expanded="true"/);
@@ -286,10 +286,28 @@ describe('Inbox on a phone (860 px and below, a conversation open)', () => {
 
     it('uses a hot lead as the first chip when there is no stage, and draws no More chip when there is nothing to put behind it', () => {
         const { Inbox } = load({ phone: true });
-        const bare = quiet({ is_user_follow_business: true });
-        const markup = String(Inbox.metaMarkup(bare));
+        const markup = String(Inbox.metaMarkup(quiet()));
         assert.ok(!markup.includes('chat-meta-more'));
-        assert.ok(text(markup).includes('Follows you') && text(markup).includes('left to reply'));
+        assert.equal((markup.match(/class="chip[ "]/g) || []).length, 1);
+        assert.ok(text(markup).includes('left to reply'));
+        const follows = String(Inbox.metaMarkup(quiet({ is_user_follow_business: true })));
+        assert.ok(follows.includes('chat-meta-more') && !text(follows).includes('Follows you'), 'follows-you is behind More on a phone');
+    });
+
+    it('the composer box has two rows, and the phone stylesheet keeps the hint to two lines and the actions in one row', () => {
+        const { Inbox, h } = load({ phone: true });
+        h.el('chat-pane-container');
+        const thread = waiting();
+        Inbox.threads = [thread];
+        Inbox.renderChatShell(thread);
+        assert.match(h.el('chat-pane-container').innerHTML, /<textarea id="chat-input-text" rows="2"/);
+        const css = readFileSync('dashboard/css/styles.css', 'utf8');
+        const phone = css.slice(css.indexOf("@media (max-width: 860px) {\n    body:has(.inbox-layout[data-pane='chat'])"));
+        const block = phone.slice(0, phone.indexOf('\n}\n'));
+        assert.match(block, /\.composer-foot > \.composer-hint \{ display: contents; \}/);
+        assert.match(block, /line-clamp: 2/);
+        assert.match(block, /\.composer-foot > \.btn, \.composer-foot > \.composer-hint > \.btn \{ flex: 1 1 auto/);
+        assert.match(css, /\.composer-foot > \.composer-hint \{ flex: 1 1 24ch;/, 'the wide rule is untouched');
     });
 
     it('draws every chip on a wide screen, and no More chip', () => {

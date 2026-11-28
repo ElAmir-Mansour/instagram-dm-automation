@@ -1921,7 +1921,7 @@ const InboxPage = {
                 <div class="composer-window" id="composer-window">${windowOffer}</div>
                 <form id="chat-send-form" data-submit="inbox:sendMessage" data-id="${thread.id}"${closed ? html.raw(' hidden') : ''}>
                     <label class="sr-only" for="chat-input-text">${t('inbox.replyLabel')}</label>
-                    <textarea id="chat-input-text" dir="auto" placeholder="${this.placeholderText()}"
+                    <textarea id="chat-input-text" rows="2" dir="auto" placeholder="${this.placeholderText()}"
                               aria-describedby="composer-hint"></textarea>
                     ${UI.button({
                         variant: 'primary', type: 'submit', icon: 'send',
@@ -2024,7 +2024,7 @@ const InboxPage = {
     metaMarkup(thread) {
         if (!thread) return '';
         const chips = [];
-        // On a phone only the first of each kind marked `lead` shows: the stage (or hot), the window, whether they follow you. The rest are
+        // On a phone only the first of each kind marked `lead` shows: the stage (or hot) and the window (two chips, one row of 29px plus the More button). The rest are
         // behind "More about <name>" (R1-I15), because the log, not the chips, is what the screen is for.
         const lead = new Set();
         const add = (chip, isLead = false) => { if (isLead) lead.add(chips.length); chips.push(chip); };
@@ -2054,8 +2054,8 @@ const InboxPage = {
         const windowChip = this.windowChip(thread);
         if (windowChip) add(this.metaChip(windowChip.text, { icon: 'clock', muted: windowChip.muted }), true);
         for (const chip of this.linkChips(thread)) add(chip);
-        if (thread.is_user_follow_business === true) add(this.metaChip(t('inbox.meta.followsYou'), { icon: 'user-check', accent: true }), true);
-        else if (thread.is_user_follow_business === false) add(this.metaChip(t('inbox.meta.notFollowsYou')), true);
+        if (thread.is_user_follow_business === true) add(this.metaChip(t('inbox.meta.followsYou'), { icon: 'user-check', accent: true }));
+        else if (thread.is_user_follow_business === false) add(this.metaChip(t('inbox.meta.notFollowsYou')));
         if (thread.is_business_follow_user === true) add(this.metaChip(t('inbox.meta.youFollow'), { icon: 'users', accent: true }));
         else if (thread.is_business_follow_user === false) add(this.metaChip(t('inbox.meta.youDontFollow')));
         if (thread.is_verified_user === true) add(this.metaChip(t('inbox.meta.verified'), { accent: true }));
@@ -2070,7 +2070,7 @@ const InboxPage = {
         }
         if (!chips.length) return '';
         if (!this.isPhone()) return html`${chips}`;
-        // One screen, one conversation: three chips, and the rest one tap away.
+        // One screen, one conversation: two chips, and the rest (whether they follow you included) one tap away.
         const shown = chips.filter((_, i) => lead.has(i));
         const rest = chips.filter((_, i) => !lead.has(i));
         if (!rest.length) return html`${shown}`;

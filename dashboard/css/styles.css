@@ -5293,6 +5293,19 @@ button.chip-more:focus-visible { outline: 2px solid var(--accent); outline-offse
     .chat-meta { padding: var(--space-1) var(--space-3); }
     .chat-composer { padding: var(--space-2) var(--space-3); }
     .composer-handled-slot:not(:empty) { display: inline-flex; align-items: center; }
+    /* The composer, short (R1-I15 follow-up): the box keeps two rows with less padding, the hint is at most two lines at --fs-100, and the
+       actions (Hand back, Mark handled) share one row. The hint's own box dissolves so its button joins the foot's row. */
+    .chat-composer { padding-block: var(--space-1); }
+    .chat-composer textarea { padding-block: var(--space-2); }
+    .composer-foot { gap: var(--space-1) var(--space-2); }
+    .composer-foot > .composer-hint { display: contents; }
+    .composer-foot > .composer-hint > span {
+        flex: 1 1 100%; min-inline-size: 0; font-size: var(--fs-100); color: var(--text-muted);
+        display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden;
+    }
+    .composer-foot > .btn, .composer-foot > .composer-hint > .btn { flex: 1 1 auto; min-inline-size: 0; white-space: normal; }
+    .composer-foot > .composer-handled-slot:not(:empty) { flex: 1 1 auto; }
+    .composer-foot > .composer-handled-slot .btn { inline-size: 100%; white-space: normal; }
 }
 
 /* G6: a range switch dims the numbers it is replacing instead of blanking them. */
