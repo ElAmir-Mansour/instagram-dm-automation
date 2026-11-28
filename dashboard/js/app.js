@@ -332,6 +332,42 @@ const App = {
         apply();
     },
 
+    /**
+     * `--sticky-top` / `--sticky-bottom` (styles.css, `html { scroll-padding-block }`): how much of the viewport the sticky chrome covers, so
+     * Tab and Shift+Tab scroll a focused field clear of it. The header is always sticky (a phone's two-row header included, measured live);
+     * the Settings tab bar sits under it; a save bar covers the bottom while it is on the page. Pages come and go, so the bars are
+     * looked up again whenever the DOM changes, and each is watched for a size change.
+     */
+    syncStickyInsets() {
+        if (typeof ResizeObserver !== 'function' || typeof MutationObserver !== 'function') return;
+        const root = document.documentElement.style;
+        const BOTTOM_BARS = '.studio-savebar, .welcome-bar, [data-sticky-bar]';
+        const watched = new Set();
+        const ro = new ResizeObserver(() => apply());
+        const height = (el) => (el && el.offsetParent !== null ? Math.ceil(el.getBoundingClientRect().height) : 0);
+        const apply = () => {
+            const header = document.querySelector('.page-header');
+            const tabbar = document.querySelector('.settings-tabbar');
+            let bottom = 0;
+            for (const bar of document.querySelectorAll(BOTTOM_BARS)) bottom = Math.max(bottom, height(bar));
+            const top = height(header) + height(tabbar);
+            root.setProperty('--sticky-top', `${top}px`);
+            root.setProperty('--sticky-bottom', bottom ? `${bottom + 12}px` : '0px');
+            for (const el of document.querySelectorAll(`.page-header, .settings-tabbar, ${BOTTOM_BARS}`)) {
+                if (!watched.has(el)) { watched.add(el); ro.observe(el); }
+            }
+            for (const el of watched) if (!el.isConnected) { watched.delete(el); ro.unobserve(el); }
+        };
+        let queued = false;
+        new MutationObserver(() => {
+            if (queued) return;
+            queued = true;
+            requestAnimationFrame(() => { queued = false; apply(); });
+        }).observe(document.body, { childList: true, subtree: true });
+        window.addEventListener('resize', apply);
+        apply();
+    },
+
     init() {
         I18N.init();
         I18N.applyStatic();
@@ -398,6 +434,7 @@ const App = {
         document.getElementById('logout-btn').addEventListener('click', () => this.logout());
 
         this.syncHeaderHeight();
+        this.syncStickyInsets();
 
         // Mobile menu — the sidebar becomes a fixed-position drawer at
         // ≤860px (see the `@media (max-width: 860px)` block in styles.css).

@@ -196,7 +196,7 @@ const AdsAudiencesPage = {
                 <p class="form-hint">${t('ads.aud.optout.body')}</p>
                 <div class="form-group">
                     <label class="form-label" for="adsaud-optout-contact">${t('ads.aud.optout.label')}</label>
-                    <input class="form-input" id="adsaud-optout-contact" dir="ltr" autocomplete="off" maxlength="200" placeholder="+20… / name@example.com">
+                    <input class="field" id="adsaud-optout-contact" dir="ltr" autocomplete="off" maxlength="200" placeholder="+20… / name@example.com">
                 </div>
                 <div id="adsaud-optout-msg"></div>
                 <div class="adsaud-actions">
@@ -216,7 +216,7 @@ const AdsAudiencesPage = {
             if (box) box.value = '';
             if (msg) msg.innerHTML = esc(html`<p class="form-hint text-success">${t('ads.aud.optout.saved')}</p>`);
         } catch (err) {
-            if (msg) msg.innerHTML = esc(html`<p class="form-error">${err && err.body && err.body.field === 'contact' ? t('ads.aud.optout.invalid') : this.refusalText(err)}</p>`);
+            UI.formError(msg, err && err.body && err.body.field === 'contact' ? t('ads.aud.optout.invalid') : this.refusalText(err), { field: box });
         }
     },
 
@@ -298,19 +298,19 @@ const AdsAudiencesPage = {
                 <p class="form-hint">${t('ads.aud.list.privacy')} ${helpLink}</p>
                 <div class="form-group">
                     <label class="form-label" for="adsaud-list-name">${t('ads.aud.form.name')}</label>
-                    <input class="form-input" id="adsaud-list-name" maxlength="100" dir="auto" autocomplete="off">
+                    <input class="field" id="adsaud-list-name" maxlength="100" dir="auto" autocomplete="off">
                     <p class="form-hint">${t('ads.aud.form.nameHint')}</p>
                 </div>
                 <div class="form-group">
                     <label class="form-label" for="adsaud-list-country">${t('ads.aud.list.defaultCountry')}</label>
-                    <select class="form-input" id="adsaud-list-country">
+                    <select class="select" id="adsaud-list-country">
                         ${countries.map((c) => html`<option value="${c}">${this.countryName(c)}</option>`)}
                     </select>
                     <p class="form-hint">${t('ads.aud.list.defaultCountryHint')}</p>
                 </div>
                 <div class="form-group">
                     <label class="form-label" for="adsaud-list-columns">${t('ads.aud.list.columns')}</label>
-                    <select class="form-input" id="adsaud-list-columns">
+                    <select class="select" id="adsaud-list-columns">
                         <option value="auto">${t('ads.aud.list.columns.auto')}</option>
                         <option value="EMAIL">${t('ads.aud.list.columns.EMAIL')}</option>
                         <option value="PHONE">${t('ads.aud.list.columns.PHONE')}</option>
@@ -320,9 +320,9 @@ const AdsAudiencesPage = {
                 </div>
                 <div class="form-group">
                     <label class="form-label" for="adsaud-list-text">${t('ads.aud.list.paste')}</label>
-                    <textarea class="form-input" id="adsaud-list-text" rows="6" dir="ltr" autocomplete="off" spellcheck="false"></textarea>
+                    <textarea class="field-textarea" id="adsaud-list-text" rows="6" dir="ltr" autocomplete="off" spellcheck="false"></textarea>
                     <label class="form-label" for="adsaud-list-file">${t('ads.aud.list.file')}</label>
-                    <input class="form-input" type="file" id="adsaud-list-file" accept=".csv,.txt,text/csv,text/plain" data-change="adsaud:file">
+                    <input class="field" type="file" id="adsaud-list-file" accept=".csv,.txt,text/csv,text/plain" data-change="adsaud:file">
                     <p class="form-hint">${t('ads.aud.list.fileHint')}</p>
                 </div>
                 <div class="check-row check-row-tap adsaud-consent">
@@ -377,7 +377,7 @@ const AdsAudiencesPage = {
         return html`
             <div class="form-group">
                 <label class="form-label" for="adsaud-days">${t('ads.aud.form.days')}</label>
-                <input class="form-input" type="number" id="adsaud-days" min="1" max="${max}" step="1" value="${value}" inputmode="numeric">
+                <input class="field" type="number" id="adsaud-days" min="1" max="${max}" step="1" value="${value}" inputmode="numeric">
                 <p class="form-hint">${t('ads.aud.form.daysHint', { max: `⁦${max}⁩` })}</p>
             </div>
         `;
@@ -392,7 +392,7 @@ const AdsAudiencesPage = {
             fields = html`
                 <div class="form-group">
                     <label class="form-label" for="adsaud-event">${t('ads.aud.form.event')}</label>
-                    <select class="form-input" id="adsaud-event">${events.map((e) => html`<option value="${e}">${t(`ads.aud.event.${kind}.${e}`)}</option>`)}</select>
+                    <select class="select" id="adsaud-event">${events.map((e) => html`<option value="${e}">${t(`ads.aud.event.${kind}.${e}`)}</option>`)}</select>
                 </div>
                 ${this.daysField(max, 30)}
             `;
@@ -421,7 +421,7 @@ const AdsAudiencesPage = {
                 </fieldset>
                 <div class="form-group">
                     <label class="form-label" for="adsaud-watched">${t('ads.aud.form.watched')}</label>
-                    <select class="form-input" id="adsaud-watched">${this.WATCHED.map((w) => html`<option value="${w}" ${w === '50' ? html.raw('selected') : ''}>${t(`ads.aud.watched.${w}`)}</option>`)}</select>
+                    <select class="select" id="adsaud-watched">${this.WATCHED.map((w) => html`<option value="${w}" ${w === '50' ? html.raw('selected') : ''}>${t(`ads.aud.watched.${w}`)}</option>`)}</select>
                 </div>
                 ${this.daysField(max, 30)}
             `;
@@ -430,16 +430,16 @@ const AdsAudiencesPage = {
             fields = html`
                 <div class="form-group">
                     <label class="form-label" for="adsaud-seed">${t('ads.aud.form.seed')}</label>
-                    <select class="form-input" id="adsaud-seed">${seeds.map((a) => html`<option value="${a.id}">${a.name}</option>`)}</select>
+                    <select class="select" id="adsaud-seed">${seeds.map((a) => html`<option value="${a.id}">${a.name}</option>`)}</select>
                     <p class="form-hint">${t('ads.aud.form.seedHint')}</p>
                 </div>
                 <div class="form-group">
                     <label class="form-label" for="adsaud-country">${t('ads.aud.form.country')}</label>
-                    <select class="form-input" id="adsaud-country">${this.COUNTRIES.map((c) => html`<option value="${c}">${this.countryName(c)}</option>`)}</select>
+                    <select class="select" id="adsaud-country">${this.COUNTRIES.map((c) => html`<option value="${c}">${this.countryName(c)}</option>`)}</select>
                 </div>
                 <div class="form-group">
                     <label class="form-label" for="adsaud-ratio">${t('ads.aud.form.ratio')} <output id="adsaud-ratio-out" for="adsaud-ratio">1%</output></label>
-                    <input class="form-input" type="range" id="adsaud-ratio" min="1" max="20" step="1" value="1" data-input="adsaud:ratio">
+                    <input class="field" type="range" id="adsaud-ratio" min="1" max="20" step="1" value="1" data-input="adsaud:ratio">
                     <p class="form-hint">${t('ads.aud.form.ratioHint')}</p>
                 </div>
             `;
@@ -452,7 +452,7 @@ const AdsAudiencesPage = {
             <form id="adsaud-form" data-kind="${kind}" novalidate>
                 <div class="form-group">
                     <label class="form-label" for="adsaud-name">${t('ads.aud.form.name')}</label>
-                    <input class="form-input" id="adsaud-name" maxlength="100" dir="auto" autocomplete="off" placeholder="${t('ads.aud.form.namePlaceholder')}">
+                    <input class="field" id="adsaud-name" maxlength="100" dir="auto" autocomplete="off" placeholder="${t('ads.aud.form.namePlaceholder')}">
                     <p class="form-hint">${t('ads.aud.form.nameHint')}</p>
                     <p class="form-error" id="adsaud-name-error" hidden></p>
                 </div>
@@ -487,7 +487,7 @@ const AdsAudiencesPage = {
         if (!input) return;
         const error = document.getElementById('adsaud-form-error');
         const nameError = document.getElementById('adsaud-name-error');
-        if (nameError) { nameError.hidden = true; nameError.textContent = ''; }
+        if (nameError) { nameError.hidden = true; nameError.textContent = ''; UI.unlinkError(document.getElementById('adsaud-name'), 'adsaud-name-error'); }
         try {
             const answer = await API.createAdsAudience(input);
             UI.closeModal();
@@ -500,6 +500,7 @@ const AdsAudiencesPage = {
             if (field === 'name' && nameError) {
                 nameError.textContent = this.refusalText(err);
                 nameError.hidden = false;
+                UI.linkError(document.getElementById('adsaud-name'), 'adsaud-name-error');
                 return;
             }
             if (error) error.innerHTML = esc(html`<p class="form-error" dir="auto">${this.refusalText(err)}</p>`);
@@ -551,7 +552,7 @@ const AdsAudiencesPage = {
         const error = document.getElementById('adsaud-list-error');
         if (!f) return;
         if (f.size > this.MAX_BYTES) {
-            if (error) error.innerHTML = esc(html`<p class="form-error">${t('ads.aud.err.too_large')}</p>`);
+            UI.formError(error, t('ads.aud.err.too_large'), { field: input });
             input.value = '';
             return;
         }
@@ -559,7 +560,7 @@ const AdsAudiencesPage = {
         reader.onload = () => {
             const box = document.getElementById('adsaud-list-text');
             if (box) box.value = String(reader.result || '');
-            if (error) error.innerHTML = '';
+            UI.formError(error, '');
         };
         reader.readAsText(f);
     },
@@ -572,13 +573,13 @@ const AdsAudiencesPage = {
         const text = box ? String(box.value || '') : '';
         const error = document.getElementById('adsaud-list-error');
         const result = document.getElementById('adsaud-list-result');
-        if (error) error.innerHTML = '';
+        UI.formError(error, '');
         if (!text.trim()) {
-            if (error) error.innerHTML = esc(html`<p class="form-error">${t('ads.aud.list.empty')}</p>`);
+            UI.formError(error, t('ads.aud.list.empty'), { field: box });
             return;
         }
         if (typeof Blob !== 'undefined' && new Blob([text]).size > this.MAX_BYTES) {
-            if (error) error.innerHTML = esc(html`<p class="form-error">${t('ads.aud.err.too_large')}</p>`);
+            UI.formError(error, t('ads.aud.err.too_large'), { field: box });
             return;
         }
         const columnsEl = document.getElementById('adsaud-list-columns');
@@ -600,7 +601,7 @@ const AdsAudiencesPage = {
             this.schedulePoll();
             UI.toast(t('ads.aud.list.uploaded'), 'success');
         } catch (err) {
-            if (error) error.innerHTML = esc(html`<p class="form-error" dir="auto">${this.refusalText(err)}</p>${err && err.body && typeof err.body.rowsAccepted === 'number' ? this.countsMarkup(err.body) : ''}`);
+            UI.formError(error, this.refusalText(err), { dir: 'auto', extra: err && err.body && typeof err.body.rowsAccepted === 'number' ? this.countsMarkup(err.body) : '' });
         }
     },
 
