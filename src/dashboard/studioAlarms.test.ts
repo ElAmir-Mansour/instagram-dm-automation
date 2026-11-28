@@ -185,29 +185,31 @@ describe('the Studio nav badge', () => {
     });
 });
 
+const apiOf = (request: (path: string) => Promise<unknown>) => ({ token: 't', request, getAttention: () => request('/attention'), forgetAttention: () => {} });
+
 describe('the poll', () => {
     it('keeps what it showed when a read fails: a failed read is not "all clear"', async () => {
         let fail = false;
         const calls: string[] = [];
-        const h = loadDashboard({ app: true, globals: { API: { token: 't', request: async (path: string) => { calls.push(path); if (fail) throw new Error('500'); return summary([SIGNED_OUT]); } } } });
+        const h = loadDashboard({ app: true, globals: { API: apiOf(async (path: string) => { calls.push(path); if (fail) throw new Error('500'); return summary([SIGNED_OUT]); }) } });
         const app = h.App as Json;
-        await app.refreshStudioAttention();
+        await app.refreshAttention();
         assert.deepEqual(calls, ['/attention']);
         assert.equal(app.studioAlarmItems().length, 1);
         fail = true;
-        await app.refreshStudioAttention();
+        await app.refreshAttention();
         assert.equal(app.studioAlarmItems().length, 1, 'still shown');
-        app.stopStudioAttentionPoll();
+        app.stopAttentionPoll();
         assert.equal(app.studioAlarmItems().length, 0, 'forgotten at sign-out');
     });
 
-    it('asks every five minutes while the tab is visible, polls once however often it is started, and asks again on opening a Studio screen only when stale', async () => {
+    it('asks every five minutes for a non-admin, polls once however often it is started, and asks again on opening a Studio screen only when stale', async () => {
         const calls: string[] = [];
-        const h = loadDashboard({ app: true, globals: { API: { token: 't', request: async (path: string) => { calls.push(path); return summary([]); } } } });
+        const h = loadDashboard({ app: true, globals: { API: apiOf(async (path: string) => { calls.push(path); return summary([]); }) } });
         const app = h.App as Json;
-        assert.equal(app.STUDIO_ATTENTION_MS, 300000);
-        app.startStudioAttentionPoll();
-        app.startStudioAttentionPoll();
+        assert.equal(app.ATTENTION_MS, 300000);
+        app.startAttentionPoll();
+        app.startAttentionPoll();
         await new Promise((r) => setImmediate(r));
         assert.equal(calls.length, 1, 'the second start changed nothing');
         app.refreshStudioAttentionIfStale();
@@ -215,31 +217,31 @@ describe('the poll', () => {
         app._studioAttentionAt = Date.now() - app.STUDIO_ATTENTION_FRESH_MS - 1;
         app.refreshStudioAttentionIfStale();
         assert.equal(calls.length, 2, 'stale: asked');
-        app.stopStudioAttentionPoll();
-        assert.equal(app._studioTimer, null);
+        app.stopAttentionPoll();
+        assert.equal(app._attentionTimer, null);
     });
 });
 
 describe('the poll and the sign-out', () => {
-    it('stops with the admin poll at every place a session ends, so a signed-out tab keeps no alarm', async () => {
-        const h = loadDashboard({ app: true, globals: { API: { token: 't', request: async () => summary([SIGNED_OUT]) } } });
+    it('stops at every place a session ends, so a signed-out tab keeps no alarm', async () => {
+        const h = loadDashboard({ app: true, globals: { API: apiOf(async () => summary([SIGNED_OUT])) } });
         const app = h.App as Json;
-        app.startStudioAttentionPoll();
+        app.startAttentionPoll();
         await new Promise((r) => setImmediate(r));
-        assert.ok(app._studioTimer, 'running');
+        assert.ok(app._attentionTimer, 'running');
         assert.equal(app.studioAlarmItems().length, 1);
-        app.stopAdminStatusPoll();
-        assert.equal(app._studioTimer, null);
+        app.stopAttentionPoll();
+        assert.equal(app._attentionTimer, null);
         assert.equal(app.studioAlarmItems().length, 0);
     });
 
     it('does not keep a process alive for its five minutes (a test’s timer is unref’d; a page’s is a number)', () => {
-        const h = loadDashboard({ app: true, globals: { API: { token: 't', request: async () => summary([]) } } });
+        const h = loadDashboard({ app: true, globals: { API: apiOf(async () => summary([])) } });
         const app = h.App as Json;
-        app.startStudioAttentionPoll();
-        const timer = app._studioTimer;
+        app.startAttentionPoll();
+        const timer = app._attentionTimer;
         assert.ok(typeof timer.hasRef !== 'function' || timer.hasRef() === false);
-        app.stopStudioAttentionPoll();
+        app.stopAttentionPoll();
     });
 });
 
