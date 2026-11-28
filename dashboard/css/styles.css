@@ -5290,7 +5290,10 @@ button.chip-more:focus-visible { outline: 2px solid var(--accent); outline-offse
     body:has(.inbox-layout[data-pane='chat']) .page-header { row-gap: 0; padding-block-end: var(--space-2); }
     .chat-header { padding: var(--space-2) var(--space-3); gap: var(--space-2); }
     .chat-header .ai-state, .chat-header .chat-handled-slot { display: none; }
-    .chat-meta { padding: var(--space-1) var(--space-3); }
+    /* `.inbox-layout` lifts these over the base `.chat-meta` rule further down (same specificity, later wins: it did, so the phone padding
+       never applied). The chips' icons are decorative; on a phone their 16px each is what keeps the stage and the window on one row. */
+    .inbox-layout .chat-meta { padding: var(--space-1) var(--space-3); }
+    .inbox-layout .chat-meta .chip > svg { display: none; }
     .chat-composer { padding: var(--space-2) var(--space-3); }
     .composer-handled-slot:not(:empty) { display: inline-flex; align-items: center; }
     /* The composer, short (R1-I15 follow-up): the box keeps two rows with less padding, the hint is at most two lines at --fs-100, and the
