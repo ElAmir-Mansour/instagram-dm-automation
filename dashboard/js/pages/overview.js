@@ -1340,7 +1340,10 @@ const OverviewPage = {
     /** Read the attention summary again after a clear and repaint what depends on it: the briefing, the waiting tile and the Inbox badge. */
     async refreshAttention() {
         const seq = this._seq;
-        const res = await this._settle(API.getAttention());
+        // Forced: it follows a write. The shell reads it too (`App.refreshAttention`), so the Inbox badge and the title move with this screen,
+        // and Today then repaints from that same answer (the shared read is fresh) instead of asking a second time.
+        if (typeof App !== 'undefined' && typeof App.refreshAttention === 'function') await App.refreshAttention({ force: true });
+        const res = await this._settle(API.getAttention(typeof App !== 'undefined' && typeof App.refreshAttention === 'function' ? {} : { force: true }));
         if (seq !== this._seq) return;
         const host = this.region('briefing');
         if (host && this._briefingInputs) this.paintBriefing(host, res);

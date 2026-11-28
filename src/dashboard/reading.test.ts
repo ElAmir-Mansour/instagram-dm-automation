@@ -390,7 +390,7 @@ describe('Inbox — find → read → reply → resolve (SH3 I1 I2 I3 I7 I9 I12)
         assert.ok(String(I.layout()).includes('data-action="inbox:setFilter" data-filter="todo"'));
     });
 
-    it('asks for 100, says how many need a reply and "Showing 100 of N", and feeds the nav count', async () => {
+    it('asks for 100, says how many need a reply and "Showing 100 of N"', async () => {
         const s = load();
         const I = s.pages.Inbox;
         const count = s.host('inbox-count');
@@ -399,7 +399,7 @@ describe('Inbox — find → read → reply → resolve (SH3 I1 I2 I3 I7 I9 I12)
         assert.deepEqual(plain(s.calls[0]!.args[0]), { limit: 100 });
         assert.equal(text(count.innerHTML), 'Showing 3 of 250 — search to reach the rest.');
         assert.equal(I.todoCount(), 1, 'what needs a reply is the To do count on its button now');
-        assert.deepEqual(s.waiting, [1]);
+        assert.deepEqual(s.waiting, [], 'the Inbox sets no badge of its own: the shell shows the server\'s count (R4-F1)');
         I.destroy();
     });
 

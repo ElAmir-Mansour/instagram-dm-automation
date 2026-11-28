@@ -333,57 +333,58 @@ describe('Administration dot: the platform has a problem (counts.platform), hidd
         }
     });
 
+    const withApi = (request: (path: string) => Promise<unknown>) => ({ API: { token: 't', request, getAttention: () => request('/attention'), forgetAttention: () => {} } });
+
     it('shows the dot for one problem or more, and removes it at zero', async () => {
         let platform: unknown = 2;
         const calls: string[] = [];
-        const s = adminShell({ API: { token: 't', request: async (path: string) => { calls.push(path); return answer(platform); } } });
-        await s.App.refreshAdminStatus();
+        const s = adminShell(withApi(async (path: string) => { calls.push(path); return answer(platform); }));
+        await s.App.refreshAttention();
         assert.deepEqual(calls, ['/attention']);
         assert.equal(s.dot.hidden, false);
         platform = 0;
-        await s.App.refreshAdminStatus();
+        await s.App.refreshAttention();
         assert.equal(s.dot.hidden, true);
     });
 
-    it('keeps what the dot said when the read fails, and never asks for a session that is not an admin’s', async () => {
+    it('keeps what the dot said when the read fails, and never shows it for a session that is not an admin’s', async () => {
         let fail = false;
         const calls: string[] = [];
-        const s = adminShell({ API: { token: 't', request: async (path: string) => { calls.push(path); if (fail) throw new Error('500'); return answer(1); } } });
-        await s.App.refreshAdminStatus();
+        const s = adminShell(withApi(async (path: string) => { calls.push(path); if (fail) throw new Error('500'); return answer(1); }));
+        await s.App.refreshAttention();
         assert.equal(s.dot.hidden, false);
         fail = true;
-        await s.App.refreshAdminStatus();
+        await s.App.refreshAttention();
         assert.equal(s.dot.hidden, false, 'a failed read is not "all clear"');
+        fail = false;
         s.App.session.role = 'user';
-        const before = calls.length;
-        await s.App.refreshAdminStatus();
-        assert.equal(calls.length, before, 'no request: counts.platform is sent to nobody else');
-        assert.equal(s.dot.hidden, true, 'and a session that is not an admin’s has no dot');
+        await s.App.refreshAttention();
+        assert.equal(s.dot.hidden, true, 'a session that is not an admin’s has no dot, though the answer says 1');
     });
 
     it('polls once however often the chrome is applied, and stops (and clears the dot) at sign-out', async () => {
         const calls: string[] = [];
-        const s = adminShell({ API: { token: 't', request: async (path: string) => { calls.push(path); return answer(3); } } });
-        s.App.startAdminStatusPoll();
-        s.App.startAdminStatusPoll();
+        const s = adminShell(withApi(async (path: string) => { calls.push(path); return answer(3); }));
+        s.App.startAttentionPoll();
+        s.App.startAttentionPoll();
         await settle();
         assert.equal(calls.length, 1, 'the second start changed nothing');
-        assert.ok(s.App._adminStatusTimer, 'a timer is running');
+        assert.ok(s.App._attentionTimer, 'a timer is running');
         assert.equal(s.dot.hidden, false);
-        s.App.stopAdminStatusPoll();
-        assert.equal(s.App._adminStatusTimer, null);
+        s.App.stopAttentionPoll();
+        assert.equal(s.App._attentionTimer, null);
         assert.equal(s.dot.hidden, true);
-        s.App.startAdminStatusPoll();
+        s.App.startAttentionPoll();
         await settle();
         assert.equal(calls.length, 2, 'and it can start again');
-        s.App.stopAdminStatusPoll();
+        s.App.stopAttentionPoll();
     });
 
-    it('asks every two minutes, and only while the tab is visible', () => {
+    it('asks every two minutes for an admin, and only while the tab is visible', () => {
         const { App } = rig();
         assert.equal(App.ADMIN_STATUS_MS, 120000);
         const src = read('dashboard/js/app.js');
-        assert.match(src, /setInterval\(\(\) => \{\s*if \(document\.visibilityState === 'visible'\) this\.refreshAdminStatus\(\);/);
+        assert.match(src, /setInterval\(\(\) => \{\s*if \(document\.visibilityState === 'visible'\) this\.refreshAttention\(\);/);
     });
 
     it('is drawn in the danger tone, because it states what broke, and the waiting count is not', () => {
@@ -898,7 +899,7 @@ describe('first frame: a stored session opens on a skeleton, not on the login fo
         assert.equal(root.hasAttribute('data-session'), true, 'still the skeleton while /auth/me is being answered');
         await shown;
         assert.equal(lifted(), true, 'the dashboard is on screen');
-        r.App.stopAdminStatusPoll();
+        r.App.stopAttentionPoll();
     });
 
     it('remembers whether the last answer sent the tenant to the wizard, from an answer and never from a failure', async () => {

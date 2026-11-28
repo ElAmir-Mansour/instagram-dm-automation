@@ -169,7 +169,7 @@ describe('Inbox: which threads need you', () => {
         assert.ok(String(I.emptyMarkup('todo')).includes(s.t('inbox.noTodo')));
     });
 
-    it('counts on the nav badge with the threads waiting for a reply, each once', () => {
+    it('needs-a-person counts the threads handed over or waiting for a reply, each once', () => {
         const s = load();
         const I = s.Inbox;
         I.threads = [
@@ -180,8 +180,9 @@ describe('Inbox: which threads need you', () => {
             handed({ id: 'e', last_operator_at: at(60000) }),                                    // answered
             handed({ id: 'f', is_bot_active: true }),                                            // an engine failure: the bot is on, a person still has to look
         ];
-        I.reportWaiting();
-        assert.deepEqual(s.waiting, [4]);
+        // The badge itself is the server's `counts.inbox` now (R4-F1); the rule it counts with is this predicate, each thread once.
+        assert.equal(I.threads.filter((x: Json) => s.Attention.needsHuman(x)).length, 4);
+        assert.deepEqual(s.waiting, [], 'and the Inbox sets no badge of its own');
     });
 });
 
