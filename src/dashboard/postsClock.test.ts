@@ -1,5 +1,5 @@
 /**
- * One clock, the workspace's (R2-SC-1, R2-CA-7). The device is in Dubai and the workspace in Riyadh, one hour apart: a time read or
+ * One clock, the workspace's (R2-SC-1, R2-CA-7). The device is in Dubai and the workspace in Kuwait, one hour apart: a time read or
  * filled in the device's zone is a different instant from the one the card says.
  *
  * The REAL shipped files in a `node:vm` context. The process runs in Dubai (`TZ`), so `Intl` in the page is the Dubai device's.
@@ -10,8 +10,8 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { loadDashboard, type Json } from './_harness.js';
 
-const RIYADH = 'Asia/Riyadh';
-/** 12:00 on Friday 1 Jan 2027 in Riyadh (UTC+3), 13:00 in Dubai (UTC+4). */
+const KUWAIT = 'Asia/Kuwait';
+/** 12:00 on Friday 1 Jan 2027 in Kuwait (UTC+3), 13:00 in Dubai (UTC+4). */
 const CARD_ISO = '2027-01-01T09:00:00.000Z';
 
 /** `new FormData(form)` for a fake form: the fields a real one would have read. */
@@ -23,7 +23,7 @@ class FakeFormData {
     has(name: string): boolean { return name in this.fields; }
 }
 
-function loadPosts(lang: 'ar' | 'en' = 'en', workspaceZone: string | null = RIYADH): { h: Json; API: Json; P: Json; modal(): string } {
+function loadPosts(lang: 'ar' | 'en' = 'en', workspaceZone: string | null = KUWAIT): { h: Json; API: Json; P: Json; modal(): string } {
     const Admin = { emptyState: () => '', confirm: () => {} };
     const API: Json = { token: 't' };
     const session = workspaceZone ? { workspace: { owner: true, metaConnect: 'operator', timezone: workspaceZone } } : { workspace: null };
@@ -38,9 +38,9 @@ const submitEvent = { preventDefault: (): void => {} };
 
 describe('the workspace zone reaches every role through the session', () => {
     it('UI.zone() prefers the zone /auth/me carried, then what a screen set, then the device', () => {
-        const { h } = loadPosts('en', RIYADH);
+        const { h } = loadPosts('en', KUWAIT);
         assert.equal(h.UI.deviceZone(), 'Asia/Dubai');
-        assert.equal(h.UI.zone(), RIYADH);
+        assert.equal(h.UI.zone(), KUWAIT);
         assert.equal(h.UI.zone('Africa/Cairo'), 'Africa/Cairo', 'a screen that has just read its own settings still wins');
         const none = loadPosts('en', null);
         assert.equal(none.h.UI.zone(), 'Asia/Dubai', 'no workspace zone: the old fallback');
@@ -49,7 +49,7 @@ describe('the workspace zone reaches every role through the session', () => {
     });
 });
 
-describe('Scheduler Edit (Dubai device, Riyadh workspace)', () => {
+describe('Scheduler Edit (Dubai device, Kuwait workspace)', () => {
     const post = { id: 'p1', platform: 'instagram', post_type: 'image', status: 'PENDING', caption: 'c', media_url: 'https://cdn.test/a.jpg', scheduled_time: CARD_ISO };
 
     it('fills the time the card shows (12:00), names the city and the device difference', () => {
@@ -58,17 +58,17 @@ describe('Scheduler Edit (Dubai device, Riyadh workspace)', () => {
         r.P.showEditModal('p1');
         const m = r.modal();
         assert.match(m, /name="scheduled_time"\s+value="2027-01-01T12:00"/);
-        assert.match(m, /Publish time \(Riyadh time\)/);
-        assert.match(m, /This device is on Dubai time; times here are Riyadh time\./);
-        assert.match(m, /Jan 1, 2027, 12:00 \(Riyadh\)|1 Jan 2027, 12:00 \(Riyadh\)|Jan 1, 2027 at 12:00 \(Riyadh\)|12:00 \(Riyadh\)/, 'the expected-publish line names the zone');
+        assert.match(m, /Publish time \(Kuwait time\)/);
+        assert.match(m, /This device is on Dubai time; times here are Kuwait time\./);
+        assert.match(m, /Jan 1, 2027, 12:00 \(Kuwait\)|1 Jan 2027, 12:00 \(Kuwait\)|Jan 1, 2027 at 12:00 \(Kuwait\)|12:00 \(Kuwait\)/, 'the expected-publish line names the zone');
     });
 
     it('says it in Arabic', () => {
         const r = loadPosts('ar');
         r.P.posts = [post];
         r.P.showEditModal('p1');
-        assert.match(r.modal(), /موعد النشر \(بتوقيت الرياض\)/);
-        assert.match(r.modal(), /هذا الجهاز على توقيت دبي، والمواعيد هنا بتوقيت الرياض\./);
+        assert.match(r.modal(), /موعد النشر \(بتوقيت الكويت\)/);
+        assert.match(r.modal(), /هذا الجهاز على توقيت دبي، والمواعيد هنا بتوقيت الكويت\./);
     });
 
     it('saving the value it shows keeps the same UTC instant', async () => {
@@ -91,24 +91,24 @@ describe('Scheduler Edit (Dubai device, Riyadh workspace)', () => {
     });
 });
 
-describe('the composer (Dubai device, Riyadh workspace)', () => {
+describe('the composer (Dubai device, Kuwait workspace)', () => {
     it('defaults to an hour from now in the workspace zone, with min in the same zone', () => {
         const r = loadPosts();
         r.P.showCreateModal();
         const m = r.modal();
         const value = /name="scheduled_time"\s+value="([^"]+)"/.exec(m)![1]!;
         const min = /min="([^"]+)"/.exec(m)![1]!;
-        const expectedMin = r.h.UI.zoneInputValue(new Date(), RIYADH);
-        const expectedDefault = r.h.UI.zoneInputValue(new Date(Date.now() + 3600 * 1000), RIYADH);
+        const expectedMin = r.h.UI.zoneInputValue(new Date(), KUWAIT);
+        const expectedDefault = r.h.UI.zoneInputValue(new Date(Date.now() + 3600 * 1000), KUWAIT);
         // Compare as instants so a minute boundary between the two reads cannot flake.
         const gap = (a: string, b: string): number => Math.abs(Date.parse(`${a}:00Z`) - Date.parse(`${b}:00Z`));
         assert.ok(gap(min, expectedMin) <= 60000, `${min} vs ${expectedMin}`);
         assert.ok(gap(value, expectedDefault) <= 60000, `${value} vs ${expectedDefault}`);
         assert.notEqual(min, r.h.UI.toLocalInputValue(new Date()), 'not the Dubai device\'s wall clock');
-        assert.match(m, /Publish time \(Riyadh time\)/);
+        assert.match(m, /Publish time \(Kuwait time\)/);
     });
 
-    it('reads a typed time as Riyadh wall time', async () => {
+    it('reads a typed time as Kuwait wall time', async () => {
         const r = loadPosts();
         const sent: Json[] = [];
         r.API.createScheduledPost = (body: Json) => { sent.push(JSON.parse(JSON.stringify(body))); return Promise.resolve({ id: 'n', platform: body.platform, status: 'PENDING' }); };
@@ -119,7 +119,7 @@ describe('the composer (Dubai device, Riyadh workspace)', () => {
 
 describe('the carousel editor\'s custom time', () => {
     it('is read in the workspace zone, not the device\'s', () => {
-        const h = loadDashboard({ files: ['dashboard/js/pages/studio.js'], globals: { API: { token: 't' }, FormData: FakeFormData, App: { canOperate: () => true, session: { workspace: { timezone: RIYADH } } } } });
+        const h = loadDashboard({ files: ['dashboard/js/pages/studio.js'], globals: { API: { token: 't' }, FormData: FakeFormData, App: { canOperate: () => true, session: { workspace: { timezone: KUWAIT } } } } });
         const S = h.run('StudioPage');
         const out = S.readSchedule(fakeForm({ slot: 'custom', custom_time: '2099-01-01T12:00' }));
         assert.equal(out.ok, true);

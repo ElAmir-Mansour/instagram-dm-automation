@@ -1099,10 +1099,10 @@ describe('GET /api/auth/me: modules and workspace (U3)', () => {
     });
 
     it('carries the workspace\'s time zone for every role (R2-SC-1): the profile\'s identity.timezone, which Studio settings call schedule.timezone', async () => {
-        db.routes.unshift([/FROM creator_profiles WHERE creator_id/, () => ({ rows: [{ profile_schema: 1, identity_timezone: 'Asia/Riyadh' }] })]);
+        db.routes.unshift([/FROM creator_profiles WHERE creator_id/, () => ({ rows: [{ profile_schema: 1, identity_timezone: 'Asia/Kuwait' }] })]);
         settings.set(`tenant.modules.${COMPANY_TENANT}`, COMPANY_DOC);
         const viewer = await me({ userId: ADMIN_USER, role: 'user', tenantId: COMPANY_TENANT });
-        assert.equal(viewer.body.workspace.timezone, 'Asia/Riyadh');
+        assert.equal(viewer.body.workspace.timezone, 'Asia/Kuwait');
     });
 
     it('a zone that cannot be read is \'\' and never an error: the dashboard keeps the zone it had', async () => {
