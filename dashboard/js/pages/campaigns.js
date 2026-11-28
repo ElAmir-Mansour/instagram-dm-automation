@@ -622,6 +622,7 @@ const CampaignsPage = {
                 title: t('ui.discard.title'),
                 body: t('common.discardConfirm'),
                 confirmLabel: t('ui.discard.confirm'),
+                confirmIcon: 'x',
                 cancelLabel: t('ui.discard.keep'),
                 onConfirm: () => { UI.closeModal(); this.showEditModal(String(id)); },
             });

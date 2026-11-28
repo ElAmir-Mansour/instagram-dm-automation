@@ -3104,6 +3104,8 @@ details[open] > .tiktok-app-summary svg { transform: rotate(180deg); }
 .invite-card-action { flex: 1 1 12rem; justify-content: center; }
 .invite-card-facts { margin-block-end: var(--space-3); }
 .invite-card-footer { flex-wrap: wrap; }
+/* Revoke is the last button and set apart from the safe ones. */
+.invite-card-footer .invite-card-revoke { margin-inline-start: auto; }
 /* What the person who made a link still has to do (invite_card.js `context.todo`, U3): a short checklist under the link. */
 .invite-card-todo { margin-block: var(--space-4); padding: var(--space-3) var(--space-4); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); background: var(--surface-sunken, transparent); }
 .invite-card-todo-list { list-style: none; margin: var(--space-2) 0 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); font-size: var(--fs-200); color: var(--text-default); }

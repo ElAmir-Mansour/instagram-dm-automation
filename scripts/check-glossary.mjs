@@ -37,7 +37,10 @@
  * being cleaned (the same shape as check-voice.mjs).
  *
  * What it does not do: tell a social account from a workspace in «الحساب» / "account" (they are the same word, and the glossary
- * keeps "account" for social accounts and logins), or judge grammar. It pins the retired words; reading the copy is still a person's job.
+ * keeps "account" for social accounts and logins), or judge grammar.
+
+ * ONE MORE CHECK is not a retired word but a collision: no destructive action's Arabic label (a `…revoke`, `…delete`, `…remove`,
+ *   `jobs.cancel`… key) may equal `common.cancel` (`cancelClashes`, rule `cancel-clash`; TEAM-L1). It pins the retired words; reading the copy is still a person's job.
  *
  * Usage: `npm run check:glossary` (exits 1 and prints file:line for each hit). The pure functions are exported for check-glossary.test.mjs.
  */
@@ -157,6 +160,29 @@ export function violations(text, lang, where = '') {
     return hits;
 }
 
+// ─── One verb, one effect (TEAM-L1) ───────────────────────────────────────────────────────────────────────────────────────
+
+/** The last key segment that names a destructive action (revoke, delete, remove…): its Arabic label must not be the plain Cancel. */
+const DESTRUCTIVE_LABEL = /\.(?:revoke|revokeNamed|revokeAll|delete|remove|disconnect|erase|archive|unlink|stop)$/;
+/** Destructive labels whose key does not end in one of those words (a job's "cancel" stops the job: it is not the dialog's Cancel). */
+const DESTRUCTIVE_EXTRA = ['jobs.cancel', 'jobs.cancelCta', 'jobs.cancelFor'];
+
+/**
+ * «ألغِ» was both Cancel (`common.cancel`) and Revoke, so a red button and the dialog's way out read the same. No destructive
+ * action's Arabic label may equal `common.cancel`: revoking is «أبطِل», stopping a job «أوقِف المهمة». Returns findings in the shape
+ * of `scanPieces`, under the rule id `cancel-clash`.
+ */
+export function cancelClashes(pieces) {
+    const cancel = pieces.find((p) => p.lang === 'ar' && p.where === 'common.cancel');
+    if (!cancel) return [];
+    const plain = foldArabic(cancel.text).trim();
+    const use = 'a destructive action needs its own verb: «ألغِ» is Cancel (`common.cancel`). Revoke is «أبطِل», stopping a job «أوقِف المهمة»';
+    return pieces
+        .filter((p) => p.lang === 'ar' && p.where !== 'common.cancel' && (DESTRUCTIVE_LABEL.test(p.where) || DESTRUCTIVE_EXTRA.includes(p.where)))
+        .filter((p) => foldArabic(p.text).trim() === plain)
+        .map((p) => ({ file: p.file, line: p.line, where: p.where, lang: 'ar', rule: 'cancel-clash', word: p.text, use, text: p.text }));
+}
+
 /** Every finding for a list of pieces, before the allow-list. */
 export function scanPieces(pieces) {
     return pieces.flatMap((p) => violations(p.text, p.lang, p.where).map((v) => ({ file: p.file, line: p.line, where: p.where, lang: p.lang, rule: v.rule, word: v.word, use: v.use, text: p.text })));
@@ -218,7 +244,7 @@ export function judge(findings, allowed = ALLOWED) {
 /** The verdict over the repo at `root`: `{ findings, stale, pieces }`. */
 export function scanRepo(root = '.', read, allowed = ALLOWED) {
     const pieces = collectCopy(root, read);
-    return { ...judge(scanPieces(pieces), allowed), pieces };
+    return { ...judge([...scanPieces(pieces), ...cancelClashes(pieces)], allowed), pieces };
 }
 
 function excerpt(text, word) {

@@ -2947,6 +2947,7 @@ const GrowthPage = {
             title: t('growth.sets.deleteTitle'),
             body: t('growth.sets.deleteBody', { name: set.name }),
             confirmLabel: t('common.delete'),
+            confirmIcon: 'trash-2',
             onConfirm: () => this.saveSettings({ ...s, hashtag_sets: s.hashtag_sets.filter((_, i) => i !== index) }, 'hashtags'),
         });
     },

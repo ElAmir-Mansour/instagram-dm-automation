@@ -11,7 +11,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
-import { ALLOWED, DICT_FILES, HELP_FILE, RULES, collectCopy, helpEntries, judge, scanPieces, scanRepo, violations } from './check-glossary.mjs';
+import { ALLOWED, DICT_FILES, HELP_FILE, RULES, cancelClashes, collectCopy, helpEntries, judge, scanPieces, scanRepo, violations } from './check-glossary.mjs';
 
 const real = (p) => readFileSync(p, 'utf8');
 
@@ -226,5 +226,15 @@ describe('the allow-list and the mutations', () => {
         assert.ok(oauth, 'the OAuth client entry exists');
         const repoWithout = scanRepo('.', undefined, ALLOWED.filter((e) => e !== oauth)).findings;
         assert.ok(repoWithout.length >= 5 && repoWithout.every((f) => f.where.startsWith('settings.youtube.')), 'and it is what excuses the OAuth client');
+    });
+
+    it('MUTATION: a destructive action labelled like Cancel fails, and the shipped labels do not', () => {
+        assert.deepEqual(cancelClashes(collectCopy('.')), []);
+        for (const [key, was] of [["'studio.workers.revoke': 'أبطِل',", "'studio.workers.revoke': 'ألغِ',"], ["'invites.revoke': 'أبطِل الرابط',", "'invites.revoke': 'ألغِ',"], ["'jobs.cancel': 'أوقِف المهمة',", "'jobs.cancel': 'ألغِ',"]]) {
+            const f = scanRepo('.', withFile(DICT_FILES.ar, key, was)).findings;
+            assert.deepEqual(f.map((x) => x.rule), ['cancel-clash'], key);
+        }
+        // a plain "cancel" that IS the way out is not destructive
+        assert.deepEqual(cancelClashes([{ file: 'x', line: 1, where: 'common.cancel', lang: 'ar', text: 'ألغِ' }, { file: 'x', line: 2, where: 'foo.cancel', lang: 'ar', text: 'ألغِ' }]), []);
     });
 });

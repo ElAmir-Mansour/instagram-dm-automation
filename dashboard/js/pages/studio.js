@@ -5297,6 +5297,7 @@ const StudioPage = {
             body: t('studio.editor.deleteBody', { title: this.draftTitle(draft) }),
             hint: t('studio.editor.deleteHint'),
             confirmLabel: t('common.delete'),
+            confirmIcon: 'trash-2',
             onConfirm,
         });
     },

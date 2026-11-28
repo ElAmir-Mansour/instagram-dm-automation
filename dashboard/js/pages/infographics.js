@@ -1000,6 +1000,7 @@ UI.registerActions('infographics', {
             body: item ? item.headline : '',
             hint: t('infographics.delete.hint'),
             confirmLabel: t('infographics.action.delete'),
+            confirmIcon: 'trash-2',
             onConfirm: async () => {
                 await API.deleteInfographic(id);
                 P.items = P.items.filter((i) => i.id !== id);

@@ -2754,6 +2754,7 @@ UI.registerActions('explainers', {
             body: item ? P.titleOf(item) : '',
             hint: t('explainers.delete.hint'),
             confirmLabel: t('explainers.action.delete'),
+            confirmIcon: 'trash-2',
             onConfirm: async () => {
                 await API.deleteExplainer(id);
                 P.items = P.items.filter((i) => i.id !== id);
@@ -2772,6 +2773,7 @@ UI.registerActions('explainers', {
             body: P.titleOf(d),
             hint: t('explainers.delete.hint'),
             confirmLabel: t('explainers.action.delete'),
+            confirmIcon: 'trash-2',
             onConfirm: async () => {
                 await API.deleteExplainer(d.id);
                 P.discardChanges();
@@ -3185,6 +3187,7 @@ UI.registerActions('explainers', {
             body: c.name || c.key,
             hint: t('explainers.character.removeHint'),
             confirmLabel: t('explainers.character.remove'),
+            confirmIcon: 'x',
             onConfirm: async () => {
                 P.captureCharacters();
                 P.cfg.characters.splice(i, 1);
@@ -3392,6 +3395,7 @@ UI.registerActions('explainers', {
             body: m.title,
             hint: t('explainers.music.removeHint'),
             confirmLabel: t('explainers.music.remove'),
+            confirmIcon: 'x',
             onConfirm: async () => {
                 P.captureMusic();
                 const [gone] = P.cfg.music.splice(i, 1);

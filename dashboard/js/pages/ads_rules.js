@@ -544,7 +544,7 @@ const AdsRulesPage = {
         const r = this.find(id);
         if (!r) return;
         UI.confirm({
-            title: t('ads.rules.delete.title'), body: t('ads.rules.delete.body', { name: r.name }), confirmLabel: t('common.delete'),
+            title: t('ads.rules.delete.title'), body: t('ads.rules.delete.body', { name: r.name }), confirmLabel: t('common.delete'), confirmIcon: 'trash-2',
             onConfirm: async () => {
                 try {
                     await API.deleteAdsRule(id);

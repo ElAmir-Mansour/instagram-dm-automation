@@ -1397,6 +1397,7 @@ const WhatsAppCard = {
             body: t('wa.link.delete.body'),
             hint: t('wa.link.delete.hint'),
             confirmLabel: t('common.delete'),
+            confirmIcon: 'trash-2',
             onConfirm: () => WhatsAppCard.deleteLinkConfirmed(code),
         });
     },
