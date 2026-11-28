@@ -1583,12 +1583,19 @@ const SettingsPage = {
         const on = key !== undefined && ex.enabled[key] === true;
         return html`
             <div class="settings-block mbe-4">
-                <label class="check-row" for="explainers-on">
-                    <input type="checkbox" id="explainers-on" data-change="settings:toggleExplainers" aria-describedby="explainers-on-hint"
-                           ${on ? html.raw('checked') : ''}${tenantId ? '' : html.raw(' disabled')}>
-                    <span class="check-label">${t('settings.explainers.switch')}</span>
-                </label>
-                <p class="form-hint" id="explainers-on-hint">${t('settings.explainers.switchHint')}</p>
+                <div class="switch-row">
+                    <label class="switch" for="explainers-on">
+                        <span class="sr-only">${t('settings.explainers.switch')}</span>
+                        <input type="checkbox" id="explainers-on" data-change="settings:toggleExplainers" aria-describedby="explainers-on-hint"
+                               ${on ? html.raw('checked') : ''}${tenantId ? '' : html.raw(' disabled')}>
+                        <span class="switch-track"></span>
+                    </label>
+                    <span class="switch-text">
+                        <span class="switch-label">${t('settings.explainers.switch')}</span>
+                        <span class="form-hint" id="explainers-on-hint">${t('settings.explainers.switchHint')}</span>
+                        <span class="form-hint switch-saved" id="explainers-on-saved" role="status"></span>
+                    </span>
+                </div>
             </div>
         `;
     },
@@ -2408,12 +2415,19 @@ const SettingsPage = {
         const p = cleanup.preview || { files: 0, bytes: 0 };
         return html`
             <div class="settings-block mbe-4">
-                <label class="check-row" for="media-cleanup-on">
-                    <input type="checkbox" id="media-cleanup-on" data-change="settings:toggleMediaCleanup"
-                           aria-describedby="media-cleanup-hint" ${cleanup.on ? html.raw('checked') : ''}>
-                    <span class="check-label">${t('settings.media.cleanupOn')}</span>
-                </label>
-                <p class="form-hint" id="media-cleanup-hint">${t('settings.media.cleanupHint')}</p>
+                <div class="switch-row">
+                    <label class="switch" for="media-cleanup-on">
+                        <span class="sr-only">${t('settings.media.cleanupOn')}</span>
+                        <input type="checkbox" id="media-cleanup-on" data-change="settings:toggleMediaCleanup"
+                               aria-describedby="media-cleanup-hint" ${cleanup.on ? html.raw('checked') : ''}>
+                        <span class="switch-track"></span>
+                    </label>
+                    <span class="switch-text">
+                        <span class="switch-label">${t('settings.media.cleanupOn')}</span>
+                        <span class="form-hint" id="media-cleanup-hint">${t('settings.media.cleanupHint')}</span>
+                        <span class="form-hint switch-saved" id="media-cleanup-on-saved" role="status"></span>
+                    </span>
+                </div>
                 <p class="token-info mbs-2">
                     ${p.files > 0
                         ? t('settings.media.cleanupPreview', { files: UI.formatNumber(p.files), size: Admin.bytes(p.bytes) })
@@ -2427,6 +2441,14 @@ const SettingsPage = {
         `;
     },
 
+    /** "Saved" next to a switch that acts at once (R4-S11): a live region that clears itself. */
+    markSwitchSaved(box) {
+        const note = box && document.getElementById(`${box.id}-saved`);
+        if (!note) return;
+        note.textContent = t('settings.savedInline');
+        setTimeout(() => { if (note.textContent === t('settings.savedInline')) note.textContent = ''; }, 4000);
+    },
+
     async toggleMediaCleanup(box) {
         if (!box) return;
         const on = box.checked;
@@ -2434,6 +2456,7 @@ const SettingsPage = {
         try {
             await API.setMediaCleanup(on);
             UI.toast(on ? t('settings.media.cleanupSavedOn') : t('settings.media.cleanupSavedOff'), 'success');
+            this.markSwitchSaved(box);
         } catch (err) {
             box.checked = !on;
             UI.toast(err.message, 'error');
@@ -2494,17 +2517,18 @@ const SettingsPage = {
         const now = ms.backend;
         const radio = (value, labelKey, disabled) => html`
             <label class="check-row" for="media-backend-${value}">
-                <input type="radio" name="media-backend" id="media-backend-${value}" value="${value}" data-change="settings:setMediaBackend"
+                <input type="radio" name="media-backend" id="media-backend-${value}" value="${value}"
                        ${now === value ? html.raw('checked') : ''} ${disabled ? html.raw('disabled') : ''}>
                 <span class="check-label">${t(labelKey)}</span>
             </label>
         `;
         return html`
-            <fieldset class="settings-block mbe-4">
+            <fieldset class="settings-block mbe-4" id="media-backend-group">
                 <legend class="form-label">${t('settings.media.backend.title')}</legend>
                 ${radio('supabase', 'settings.media.backend.supabase', !supabaseOn)}
                 ${radio('r2', 'settings.media.backend.r2', false)}
                 <p class="form-hint">${t('settings.media.backend.hint')}</p>
+                ${UI.button({ variant: 'primary', size: 'sm', icon: 'check-circle', label: t('settings.media.saveChoice'), action: 'settings:setMediaBackend', id: 'media-backend-save' })}
             </fieldset>
             ${this.mediaDirectChoice(r2.direct || 'apps')}
         `;
@@ -2515,18 +2539,19 @@ const SettingsPage = {
         const labels = { apps: t('settings.media.direct.apps'), all: t('settings.media.direct.all'), off: t('settings.media.direct.off') };
         const radio = (value) => html`
             <label class="check-row" for="media-direct-${value}">
-                <input type="radio" name="media-direct" id="media-direct-${value}" value="${value}" data-change="settings:setMediaDirect"
+                <input type="radio" name="media-direct" id="media-direct-${value}" value="${value}"
                        ${now === value ? html.raw('checked') : ''}>
                 <span class="check-label">${labels[value]}</span>
             </label>
         `;
         return html`
-            <fieldset class="settings-block mbe-4">
+            <fieldset class="settings-block mbe-4" id="media-direct-group">
                 <legend class="form-label">${t('settings.media.direct.title')}</legend>
                 ${radio('apps')}
                 ${radio('all')}
                 ${radio('off')}
                 <p class="form-hint">${t('settings.media.direct.hint')}</p>
+                ${UI.button({ variant: 'primary', size: 'sm', icon: 'check-circle', label: t('settings.media.saveChoice'), action: 'settings:setMediaDirect', id: 'media-direct-save' })}
             </fieldset>
         `;
     },
@@ -2673,27 +2698,39 @@ const SettingsPage = {
         `;
     },
 
-    async setMediaDirect(input) {
-        if (!input || !input.checked) return;
+    /** The radio that is ticked in a storage group right now: an arrow key only moves it, the Save button is what sends it (R4-S11). */
+    pickedStorage(name) {
+        const picked = document.querySelector(`input[name="${name}"]:checked`);
+        return picked ? picked.value : '';
+    },
+
+    async setMediaDirect(btn) {
+        const value = this.pickedStorage('media-direct');
+        if (!value) return;
+        const restore = UI.actionBusy(btn);
+        if (restore === null) return;
         try {
-            await API.setMediaDirect(input.value);
+            await API.setMediaDirect(value);
             UI.toast(t('settings.media.direct.saved'), 'success');
             await this.render();
         } catch (err) {
-            UI.toast(err.message, 'error');
-            await this.render();
+            restore();
+            UI.toast(UI.errorLine ? UI.errorLine(err) : err.message, 'error');
         }
     },
 
-    async setMediaBackend(input) {
-        if (!input || !input.checked) return;
+    async setMediaBackend(btn) {
+        const value = this.pickedStorage('media-backend');
+        if (!value) return;
+        const restore = UI.actionBusy(btn);
+        if (restore === null) return;
         try {
-            await API.setMediaBackend(input.value);
-            UI.toast(t(input.value === 'r2' ? 'settings.media.backend.savedR2' : 'settings.media.backend.savedSupabase'), 'success');
+            await API.setMediaBackend(value);
+            UI.toast(t(value === 'r2' ? 'settings.media.backend.savedR2' : 'settings.media.backend.savedSupabase'), 'success');
             await this.render();
         } catch (err) {
-            UI.toast(err.message, 'error');
-            await this.render();
+            restore();
+            UI.toast(UI.errorLine ? UI.errorLine(err) : err.message, 'error');
         }
     },
 
@@ -4891,6 +4928,7 @@ const SettingsPage = {
         try {
             await API.setAdminExplainersEnabled({ tenant_id: tenantId, enabled: on });
             UI.toast(t(on ? 'settings.explainers.switchedOn' : 'settings.explainers.switchedOff'), 'success');
+            this.markSwitchSaved(box);
         } catch (err) {
             box.checked = !on;
             UI.toast(UI.errorLine(err), 'error');

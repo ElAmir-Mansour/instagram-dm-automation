@@ -2234,6 +2234,7 @@ const App = {
                 title: t('common.leaveTitle'),
                 body: t('common.leaveBody'),
                 confirmLabel: t('common.leaveConfirm'),
+                confirmIcon: 'log-out',
                 onConfirm: () => answer(true),
             };
             // Unsaved work inside an open dialog: ask OVER it (`stack`), never in place of it, or Cancel would come back to a

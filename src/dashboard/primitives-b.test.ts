@@ -255,6 +255,8 @@ function load(options: LoadOptions = {}): Loaded {
     const alerts = withRegions ? doc.add('div', 'toast-alerts') : new FakeNode('div', doc);
     const status = doc.add('div', 'toast-container');
     const overlay = doc.add('div', 'modal-overlay');
+    // A page starts with no dialog open: UI.confirm stacks over an open one, and draws in place otherwise.
+    overlay.classList.add('hidden');
     const content = doc.add('div', 'modal-content', overlay);
     return { UI, Admin, html, SafeHtml, doc, timers, replaced, logs, window, alerts, status, overlay, content };
 }
@@ -459,7 +461,7 @@ describe('UI.confirm', () => {
     it('draws the styled dialog: the consequence, a danger button that is a verb, the way out', () => {
         const l = load();
         const out = shown(l);
-        l.UI.confirm({ title: 'Delete campaign?', body: 'It stops answering.', hint: 'This cannot be undone.', confirmLabel: 'Delete', onConfirm: () => {} });
+        l.UI.confirm({ title: 'Delete campaign?', body: 'It stops answering.', hint: 'This cannot be undone.', confirmLabel: 'Delete', confirmIcon: 'trash-2', onConfirm: () => {} });
         const markup = out[0]!;
         assert.match(markup, /<h2 class="modal-title">Delete campaign\?<\/h2>/);
         assert.match(markup, /<p class="modal-body-text" dir="auto">It stops answering\.<\/p>/);

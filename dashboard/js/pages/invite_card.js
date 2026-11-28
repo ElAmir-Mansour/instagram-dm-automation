@@ -126,9 +126,9 @@ const InviteCard = {
                 ? UI.helpLink('team#invite', t('settings.team.helpInvite'), { newTab: true })
                 : UI.helpLink('onboarding#invite', t('help.link.onboardingInvite'), { newTab: true })}</p>
             <div class="modal-actions invite-card-footer">
-                ${UI.button({ variant: 'danger', icon: 'ban', label: t('invites.revoke'), action: 'inviteCard:revoke', data: { id: invite.id } })}
-                ${UI.button({ variant: 'secondary', icon: 'refresh-cw', label: t('invites.regenerate'), action: 'inviteCard:regenerate', data: { id: invite.id } })}
                 ${UI.button({ variant: 'primary', label: t('invites.done'), action: 'inviteCard:done' })}
+                ${UI.button({ variant: 'secondary', icon: 'refresh-cw', label: t('invites.regenerate'), action: 'inviteCard:regenerate', data: { id: invite.id } })}
+                ${UI.button({ variant: 'danger', icon: 'ban', label: t('invites.revoke'), action: 'inviteCard:revoke', data: { id: invite.id }, className: 'invite-card-revoke' })}
             </div>
         `;
     },
